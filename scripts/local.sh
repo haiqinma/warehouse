@@ -2,22 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEMPLATE_PATH="${ROOT_DIR}/config.yaml.template"
+BASE_CONFIG_PATH="${ROOT_DIR}/config.yaml"
 TMP_DIR="${ROOT_DIR}/.tmp"
 
 ROLE="${1:-active}"
 
 ACTIVE_PORT="${ACTIVE_PORT:-6065}"
 STANDBY_PORT="${STANDBY_PORT:-6066}"
-
-DB_HOST="${DB_HOST:-127.0.0.1}"
-DB_PORT="${DB_PORT:-5432}"
-DB_USER="${DB_USER:-postgres}"
-DB_PASSWORD="${DB_PASSWORD:-postgres}"
-DB_NAME="${DB_NAME:-warehouse}"
-DB_SSL_MODE="${DB_SSL_MODE:-disable}"
-
-JWT_SECRET="${JWT_SECRET:-local-dev-jwt-secret-at-least-32-chars}"
 INTERNAL_SHARED_SECRET="${INTERNAL_SHARED_SECRET:-local-dev-internal-shared-secret}"
 
 info() { printf '%s\n' "$*"; }
@@ -32,14 +23,17 @@ usage() {
 
 默认行为：
   - 不传参数时启动 active
-  - 配置文件从 config.yaml.template 生成到 .tmp/active.yaml 或 .tmp/standby.yaml
+  - 只使用现有 config.yaml 作为基础配置，不读取 config.yaml.template
+  - 生成本地调试配置到 .tmp/active.yaml 或 .tmp/standby.yaml
   - 数据目录分别使用 .tmp/active/data 和 .tmp/standby/data
   - 使用 go run ./cmd/warehouse -c <generated-config> 前台启动
 
+前提：
+  - 需要先手动准备好 config.yaml
+  - 需要先保证 go run ./cmd/warehouse -c config.yaml 可以正常启动
+
 可选环境变量：
   ACTIVE_PORT / STANDBY_PORT
-  DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME / DB_SSL_MODE
-  JWT_SECRET
   INTERNAL_SHARED_SECRET
 EOF
 }
@@ -80,37 +74,28 @@ render_config() {
       ;;
   esac
 
-  cp "${TEMPLATE_PATH}" "${output_path}"
+  cp "${BASE_CONFIG_PATH}" "${output_path}"
 
-  # 只覆盖本地双实例启动所需的关键字段，其他字段保持模板默认值。
+  # 只覆盖本地双实例必需字段，其余数据库、JWT、邮件等配置沿用现有 config.yaml。
   awk \
     -v port="${port}" \
-    -v db_host="${DB_HOST}" \
-    -v db_port="${DB_PORT}" \
-    -v db_user="${DB_USER}" \
-    -v db_password="${DB_PASSWORD}" \
-    -v db_name="${DB_NAME}" \
-    -v db_ssl_mode="${DB_SSL_MODE}" \
     -v node_id="${node_id}" \
     -v node_role="${node_role}" \
     -v peer_node_id="${peer_node_id}" \
     -v peer_base_url="${peer_base_url}" \
     -v shared_secret="${INTERNAL_SHARED_SECRET}" \
     -v data_dir="${data_dir}" \
-    -v jwt_secret="${JWT_SECRET}" \
     '
     BEGIN {
       section = ""
       subsection = ""
     }
+    /^[A-Za-z0-9_-]+:$/ {
+      section = ""
+      subsection = ""
+    }
     /^server:$/ {
       section = "server"
-      subsection = ""
-      print
-      next
-    }
-    /^database:$/ {
-      section = "database"
       subsection = ""
       print
       next
@@ -138,71 +123,12 @@ render_config() {
       print
       next
     }
-    /^web3:$/ {
-      section = "web3"
-      subsection = ""
-      print
-      next
-    }
-    /^  ucan:$/ && section == "web3" {
-      subsection = "ucan"
-      print
-      next
-    }
-    /^email:$/ {
-      section = "email"
-      subsection = ""
-      print
-      next
-    }
-    /^security:$/ {
-      section = "security"
-      subsection = ""
-      print
-      next
-    }
-    /^cors:$/ {
-      section = "cors"
-      subsection = ""
-      print
-      next
-    }
-    /^log:$/ {
-      section = "log"
-      subsection = ""
-      print
-      next
-    }
     section == "server" && $1 == "address:" {
       print "  address: \"127.0.0.1\""
       next
     }
     section == "server" && $1 == "port:" {
       print "  port: " port
-      next
-    }
-    section == "database" && $1 == "host:" {
-      print "  host: \"" db_host "\""
-      next
-    }
-    section == "database" && $1 == "port:" {
-      print "  port: " db_port
-      next
-    }
-    section == "database" && $1 == "username:" {
-      print "  username: \"" db_user "\""
-      next
-    }
-    section == "database" && $1 == "password:" {
-      print "  password: \"" db_password "\""
-      next
-    }
-    section == "database" && $1 == "database:" {
-      print "  database: \"" db_name "\""
-      next
-    }
-    section == "database" && $1 == "ssl_mode:" {
-      print "  ssl_mode: \"" db_ssl_mode "\""
       next
     }
     section == "node" && $1 == "id:" {
@@ -249,34 +175,6 @@ render_config() {
       print "  directory: \"" data_dir "\""
       next
     }
-    section == "web3" && subsection == "" && $1 == "jwt_secret:" {
-      print "  jwt_secret: \"" jwt_secret "\""
-      next
-    }
-    section == "web3" && subsection == "ucan" && $1 == "enabled:" {
-      print "    enabled: false"
-      next
-    }
-    section == "email" && $1 == "enabled:" {
-      print "  enabled: false"
-      next
-    }
-    section == "security" && $1 == "behind_proxy:" {
-      print "  behind_proxy: false"
-      next
-    }
-    section == "cors" && $1 == "enabled:" {
-      print "  enabled: false"
-      next
-    }
-    section == "cors" && $1 == "credentials:" {
-      print "  credentials: false"
-      next
-    }
-    section == "log" && $1 == "level:" {
-      print "  level: \"debug\""
-      next
-    }
     {
       print
     }
@@ -306,8 +204,9 @@ main() {
   require_command go
   require_command awk
 
-  if [[ ! -f "${TEMPLATE_PATH}" ]]; then
-    err "缺少模板文件: ${TEMPLATE_PATH}"
+  if [[ ! -f "${BASE_CONFIG_PATH}" ]]; then
+    err "缺少基础配置文件: ${BASE_CONFIG_PATH}"
+    err "请先手动从 config.yaml.template 复制出 config.yaml，并确保单实例可以正常启动。"
     exit 1
   fi
 
@@ -318,7 +217,8 @@ main() {
   render_config "${ROLE}" "${config_path}"
 
   info "role=${ROLE}"
-  info "config=${config_path}"
+  info "base_config=${BASE_CONFIG_PATH}"
+  info "generated_config=${config_path}"
   info "data_dir=${TMP_DIR}/${ROLE}/data"
   info "command=go run ./cmd/warehouse -c ${config_path}"
 

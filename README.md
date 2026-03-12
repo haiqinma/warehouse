@@ -163,11 +163,13 @@ bash scripts/local.sh standby
 ```
 
 说明：
-- 会从 `config.yaml.template` 生成本地配置到 `.tmp/active.yaml` 或 `.tmp/standby.yaml`
+- 使用前提是根目录 `config.yaml` 已经存在，并且 `go run ./cmd/warehouse -c config.yaml` 可以正常启动
+- 脚本不会读取 `config.yaml.template`，只会从现有 `config.yaml` 复制并生成本地配置到 `.tmp/active.yaml` 或 `.tmp/standby.yaml`
 - 数据目录分别使用 `.tmp/active/data` 和 `.tmp/standby/data`
 - 默认端口为 `6065`（active）和 `6066`（standby）
 - `.tmp/` 已加入 `.gitignore`
-- 可通过环境变量覆盖数据库和端口，例如 `DB_HOST`、`DB_PORT`、`ACTIVE_PORT`、`STANDBY_PORT`
+- 只覆盖本地双实例必需字段：端口、节点身份、internal replication 和数据目录
+- 可通过环境变量覆盖本地端口和 internal shared secret，例如 `ACTIVE_PORT`、`STANDBY_PORT`、`INTERNAL_SHARED_SECRET`
 
 ## 高可用部署提示
 
