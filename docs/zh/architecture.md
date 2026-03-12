@@ -9,7 +9,7 @@
 
 ## 模块划分
 
-- `cmd/server`：进程入口，解析参数、加载配置、启动服务
+- `cmd/warehouse`：进程入口，解析参数、加载配置、启动服务
 - `internal/container`：依赖注入容器，负责初始化各类组件
 - `internal/interface/http`：HTTP 路由、处理中间件、API/WebDAV Handler
 - `internal/application/service`：业务服务（WebDAV/分享/回收站等）
@@ -19,7 +19,7 @@
 
 ## 启动流程
 
-1. `cmd/server/main.go` 解析参数并加载配置（文件 + flag + env）。
+1. `cmd/warehouse/main.go` 解析参数并加载配置（文件 + flag + env）。
 2. `container.NewContainer` 依次初始化：
    - Logger
    - PostgreSQL + 迁移
@@ -37,7 +37,7 @@
 
 ```mermaid
 flowchart TB
-    A[cmd/server/main.go] --> B[config.Loader.Load]
+    A[cmd/warehouse/main.go] --> B[config.Loader.Load]
     B --> C[container.NewContainer]
     C --> D[Logger]
     C --> E[PostgreSQL + Migrate]

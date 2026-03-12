@@ -141,7 +141,7 @@ build_artifacts() {
   git_commit="$(git -C "${ROOT_DIR}" rev-parse --short HEAD)"
   ldflags="-X main.version=${version} -X main.buildTime=${build_time} -X main.gitCommit=${git_commit}"
   mkdir -p "${ROOT_DIR}/build"
-  (cd "${ROOT_DIR}" && go build -ldflags "${ldflags}" -o build/warehouse cmd/server/main.go)
+  (cd "${ROOT_DIR}" && go build -ldflags "${ldflags}" -o build/warehouse ./cmd/warehouse)
 
   if [[ ! -x "${ROOT_DIR}/build/warehouse" ]]; then
     echo "warehouse binary not found: ${ROOT_DIR}/build/warehouse" >&2

@@ -1,0 +1,369 @@
+# 多实例与多副本方案设计
+
+本文讨论当前 `warehouse` 项目在 **多实例 / 多副本** 场景下的可行方案、约束点与推荐演进路径，目标是回答两个问题：
+
+1. 当前代码距离“可水平扩展”还差什么
+2. 如果要落地，应优先选择哪条路线
+
+## 1. 结论先行
+
+当前项目的核心元数据已经集中在 PostgreSQL，但**文件内容、回收站、WebDAV 锁、挑战码/邮箱验证码**仍有明显的单机依赖，因此：
+
+- **当前最稳妥支持的形态**：单实例
+- **短期推荐的高可用形态**：`1 active + 1 standby`，文件目录分别落在两台机器的本地挂载目录；由应用新增 `internal` 接口完成 active 到 standby 的增量同步；数据库采用 PostgreSQL 主备或等效高可用
+- **正式多副本目标**：
+  - 共享 PostgreSQL
+  - 共享 POSIX 文件存储
+  - 外置临时状态存储（优先 Redis，也可先用 PostgreSQL 表）
+  - 2~N 个无状态应用副本
+  - 负载均衡转发到任意副本
+
+如果目标是“少改部署、先做可接管”，优先做 **internal 同步版 active/standby**。
+如果目标是“真正多副本 + 可滚动发布 + 可横向扩展”，优先做 **共享存储 + 外置临时状态 + 去单机内存依赖**。
+
+## 2. 当前架构里和多副本直接相关的状态
+
+### 2.1 已经适合多副本的部分
+
+- **业务元数据在 PostgreSQL**
+  - 用户、分享、定向分享、回收站记录、地址簿都已集中存储
+- **JWT / refresh token 是无状态的**
+  - 只要各副本使用同一份 `web3.jwt_secret`，令牌可跨副本验证
+- **HTTP API 大部分是无状态 handler**
+  - 配合共享数据库后，可天然多副本部署
+
+### 2.2 当前阻塞多副本的部分
+
+#### 2.2.1 文件内容与回收站仍依赖本地文件系统
+
+当前大量文件操作直接基于 `os.*` 和本地路径：
+
+- WebDAV 主读写路径：[internal/application/service/webdav_service.go](../../internal/application/service/webdav_service.go)
+- WebDAV 文件系统实现：[internal/infrastructure/webdav/fs.go](../../internal/infrastructure/webdav/fs.go)
+- 回收站恢复/清理：[internal/application/service/recycle_service.go](../../internal/application/service/recycle_service.go)
+- 定向分享文件操作：[internal/interface/http/handler/share_user.go](../../internal/interface/http/handler/share_user.go)
+
+这意味着如果每个副本各自挂本地盘并同时接流量：
+
+- A 副本上传的文件，B 副本可能看不到
+- 回收站 `.recycle` 目录会分裂
+- 分享/下载解析出的文件路径在其他副本上可能不存在
+
+这也是为什么阶段一必须坚持：
+
+- 只有 active 对外提供写流量
+- standby 只接内部同步流量
+- 文件变化按顺序复制到 standby
+
+#### 2.2.2 WebDAV 锁是进程内内存锁
+
+当前 WebDAV 锁使用 `webdav.NewMemLS()`：
+
+- [internal/application/service/webdav_service.go](../../internal/application/service/webdav_service.go)
+
+这意味着锁只在单个进程内生效：
+
+- 同一个客户端的 `LOCK/UNLOCK/PUT/MOVE` 如果被路由到不同副本，锁状态不共享
+- 多副本下 WebDAV 锁语义会失真
+
+但对于阶段一单活双机，这个问题不是第一优先级，因为 standby 不接用户 WebDAV 流量。
+
+#### 2.2.3 挑战码和邮箱验证码是内存态
+
+当前以下临时状态都存进进程内 map：
+
+- 钱包签名 challenge store：
+  - [internal/infrastructure/auth/challenge_store.go](../../internal/infrastructure/auth/challenge_store.go)
+- 邮箱验证码 store：
+  - [internal/infrastructure/auth/email_code_store.go](../../internal/infrastructure/auth/email_code_store.go)
+
+多副本下，如果：
+
+- `/auth/challenge` 落到副本 A
+- `/auth/verify` 落到副本 B
+
+则 B 无法验证 A 生成的 challenge。
+
+这同样说明：阶段一不要把 public/admin 流量同时打到多个副本。
+
+#### 2.2.4 配额统计方式在大目录/高频写下会变重
+
+当前写操作成功后会重新 `WalkDir` 统计用户目录大小：
+
+- [internal/domain/quota/service.go](../../internal/domain/quota/service.go)
+- WebDAV 写入后触发刷新：[internal/application/service/webdav_service.go](../../internal/application/service/webdav_service.go)
+
+这不是阶段一的硬阻塞，但在以下场景会成为热点：
+
+- 单用户文件量大
+- 写入频率高
+- standby 复制追赶时需要额外校验目录状态
+
+## 3. 可选方案
+
+## 3.1 方案 A：单活双机 + `internal` 增量同步（短期推荐）
+
+### 架构
+
+- 1 个 active 应用实例
+- 1 个 standby 应用实例
+- active 暴露 `public` / `admin` 接口
+- standby 不接用户流量，只接 `internal` 同步接口
+- active / standby 各自使用本地 `webdav.directory`
+- 文件变更由 active 通过 `internal` 接口异步同步到 standby
+- PostgreSQL 使用主备、托管高可用，或至少有可靠备份恢复流程
+- LB/反向代理平时只把流量导向 active
+
+### 优点
+
+- 符合当前“每个实例本地挂载”的部署现实
+- 不需要先引入共享存储
+- 仍然保留当前本地文件系统语义
+- 比外部复制更可观测，可在应用内暴露 lag / retry / last_applied 状态
+- 后续可以平滑演进到更正式的复制/一致性机制
+
+### 风险与代价
+
+- 代码改动明显大于“纯部署层复制”
+- 必须覆盖所有文件变更入口，否则会漏同步
+- 需要处理顺序、幂等、重试、失败补偿、首次全量同步
+- 如果 outbox 只做增量，不做 reconcile，长期运行会有漂移风险
+
+### 适用场景
+
+- 当前文件仍坚持本地挂载
+- 希望由 `warehouse` 自己掌握 standby 数据同步状态
+- 愿意接受阶段一是“单活 + 异步复制 + 明确 RPO”的模型
+
+## 3.2 方案 B：单活双机 + 外部复制链路（备选）
+
+### 架构
+
+- 1 个 active 应用实例
+- 1 个 standby 应用实例
+- active / standby 各自挂本地目录
+- 文件复制由存储层、块设备镜像、`rsync/lsyncd` 等外部链路完成
+- PostgreSQL 仍需主备或等效高可用
+
+### 优点
+
+- 对应用代码改动最少
+- 文件复制逻辑不进入业务代码
+
+### 缺点
+
+- 可观测性和控制面更多在应用外部
+- 应用无法直接知道复制是否追平
+- 对切换质量的判断更依赖外部系统
+
+### 结论
+
+这条路仍然可行，但不是当前要沉淀的项目级方案。
+
+## 3.3 方案 C：多副本 + 粘性会话（仅过渡，不建议作为正式方案）
+
+### 架构
+
+- 2~N 个应用副本
+- 共享 PostgreSQL
+- 共享文件存储
+- LB 做 sticky session / ip-hash
+
+### 硬伤
+
+- **不能解决 WebDAV 内存锁问题**
+- WebDAV 客户端未必稳定携带同一类粘性标识
+- 代理切换、网络抖动、客户端重连后仍可能打到别的副本
+- 故障切换后临时状态直接丢失
+
+### 结论
+
+可用于临时验证，但**不建议作为正式生产方案**。
+
+## 3.4 方案 D：共享 POSIX 存储 + 外置临时状态 + 无状态副本（正式目标）
+
+### 架构
+
+- 2~N 个应用副本
+- 1 个负载均衡入口
+- 共享 PostgreSQL
+- 共享 POSIX 文件存储
+- 1 个外置临时状态组件
+  - 优先 Redis
+  - 也可先用 PostgreSQL 表实现
+
+### 需要外置的状态
+
+- WebDAV lock
+- 钱包 challenge
+- 邮箱验证码
+- 未来若增加上传会话、分片会话，也应放入同一层
+
+### 优点
+
+- 真正支持多副本
+- 支持滚动发布
+- 副本可无状态扩缩容
+- 对当前代码改动可控，不需要先把底层文件模型重写成对象存储
+
+### 缺点
+
+- 需要新增共享存储和临时状态层
+- 需要替换当前进程内实现
+- 共享文件系统的元数据性能需要重点验证
+
+### 适用场景
+
+- 希望正式支持 2~3 个以上副本
+- 需要不停机发布
+- 后续仍以 WebDAV 作为核心能力
+
+## 3.5 方案 E：对象存储化 / 存储抽象重构（中长期方案）
+
+### 架构
+
+- 元数据：PostgreSQL
+- 文件内容：对象存储
+- 应用通过抽象的 `FileStore` 访问内容层
+- WebDAV 不再直接依赖 `os.Rename` / `os.OpenFile`
+
+### 优点
+
+- 横向扩展上限最高
+- 更适合海量文件和云环境
+
+### 缺点
+
+- 与当前代码路径差距最大
+- `MOVE` / `COPY` / `LOCK` / 目录遍历 / 回收站语义都要重新设计
+- 改造范围远超“部署升级”
+
+### 结论
+
+这不是当前项目的优先路径。若后续明确要云原生大规模扩容，再单独立项。
+
+## 4. 推荐方案
+
+## 4.1 推荐结论
+
+建议采用：
+
+- **短期目标**：方案 A
+- **正式目标**：方案 D
+
+也就是：
+
+1. 先把部署形态升级到“单活双机 + 本地文件双份 + `internal` 增量同步 + PostgreSQL 高可用”
+2. 再把进程内状态外置，升级到真正多副本
+
+这样做的原因：
+
+- 与当前“每个实例本地挂载”的现实最契合
+- 不要求立刻引入共享存储
+- 可以先把 standby 接管能力做出来，再向正式多副本演进
+
+## 4.2 为什么阶段一推荐 `internal` 同步，而不是直接靠外部复制
+
+因为当前阶段的核心诉求不只是“有第二份数据”，还包括：
+
+- 应用自己知道 standby 是否追平
+- 能暴露同步 lag / 最后应用序号 / 重试状态
+- 能在切换前明确判断是否满足 RPO
+- 能逐步把写路径收敛到统一的复制事件模型
+
+这些能力用应用内 `internal` 同步更容易沉淀。
+
+## 4.3 为什么阶段一不建议“请求内双写”
+
+也就是不建议一次用户写请求中同时：
+
+- 写 active 本地盘
+- 再同步写 standby 本地盘
+- 两边都成功才返回
+
+原因：
+
+- 请求时延会明显增大
+- standby 短暂故障会直接拖垮 active 写请求
+- 很容易出现“active 成功、standby 失败”的半成功状态
+- 回收站、重命名、删除的补偿复杂度很高
+
+因此阶段一推荐：
+
+- active 本地写成功
+- 记录持久化 outbox 事件
+- 后台 worker 异步调用 standby `internal` 接口
+- standby 幂等应用事件
+
+## 5. 阶段一落地改造清单
+
+### 5.1 设计原则
+
+- 元数据以 PostgreSQL 为准，不通过 `internal` 接口在实例间同步数据库记录
+- `internal` 只负责同步本地文件树和 `.recycle` 下的文件变化
+- 所有复制事件都用 **`webdav.directory` 根目录下的规范化相对路径** 表达
+- standby 不接 public/admin 用户流量
+- active / standby 切换前必须先确保不会双写
+
+### 5.2 第一阶段：内部复制能力
+
+需要新增：
+
+- `replication_outbox` 一类持久化事件表
+- active 侧复制 worker
+- standby 侧 `internal` apply 接口
+- 复制状态查询接口
+- 首次全量同步 + 后续增量同步机制
+
+建议设计详见：
+
+- [internal-replication-design.md](./internal-replication-design.md)
+- [internal-replication-implementation-checklist.md](./internal-replication-implementation-checklist.md)
+
+### 5.3 第二阶段：去除进程内状态
+
+需要抽象的组件：
+
+- `ChallengeStore`
+- `EmailCodeStore`
+- `webdav.LockSystem`
+
+建议做法：
+
+- 为 challenge 和 email code 定义接口
+- 为 WebDAV 锁定义 `LockBackend`
+- 默认实现保留内存版，新增 Redis / PostgreSQL 版
+
+### 5.4 第三阶段：性能与一致性优化
+
+建议后续优化：
+
+- 配额从全量 `WalkDir` 逐步改成增量更新 + 后台 reconcile
+- 为复制链路增加 lag、失败率、重试次数、最后应用序号指标
+- 为文件树增加周期性 reconcile，修复漏同步或漂移
+
+## 6. 不建议清单
+
+- 不建议把 public/admin 流量同时打到 active 和 standby
+- 不建议在阶段一用 sticky session 假装多副本
+- 不建议在当前代码上直接把底层存储切成对象存储
+- 不建议阶段一做请求内双写
+- 不建议只做增量复制而不做周期性 reconcile
+
+## 7. 建议的最终决策
+
+如果现在要定一个“项目级沉淀方案”，建议写成下面这条：
+
+> `warehouse` 的正式多副本方案采用“共享 PostgreSQL + 共享 POSIX 文件存储 + 外置临时状态存储 + 无状态应用副本”的模式；  
+> 在完成 challenge / email code / WebDAV lock 的外置化之前，仅支持单 active 或 active/standby，不将 WebDAV 流量正式分发到多个副本；  
+> 其中阶段一 active/standby 采用“本地文件双份 + `internal` 增量同步 + 单写切换”的模式，standby 不接 public/admin 用户流量。
+
+## 8. 后续实施建议
+
+建议按以下顺序推进：
+
+1. 先完成 `internal` 复制的设计与实施清单沉淀
+2. 为 active / standby 增加节点身份、内部鉴权、复制状态接口
+3. 收敛所有文件变更入口到统一的复制事件记录点
+4. 实现 outbox worker + standby apply handler
+5. 最后再推进临时状态外置化与正式多副本

@@ -13,21 +13,22 @@ import (
 
 // Router HTTP 路由器
 type Router struct {
-	config             *config.Config
-	authenticators     []auth.Authenticator
-	healthHandler      *handler.HealthHandler
-	web3Handler        *handler.Web3Handler
-	emailAuthHandler   *handler.EmailAuthHandler
-	assetsHandler      *handler.AssetsHandler
-	webdavHandler      *handler.WebDAVHandler
-	quotaHandler       *handler.QuotaHandler
-	userHandler        *handler.UserHandler
-	adminUserHandler   *handler.AdminUserHandler
-	recycleHandler     *handler.RecycleHandler
-	shareHandler       *handler.ShareHandler
-	shareUserHandler   *handler.ShareUserHandler
-	addressBookHandler *handler.AddressBookHandler
-	logger             *zap.Logger
+	config                     *config.Config
+	authenticators             []auth.Authenticator
+	healthHandler              *handler.HealthHandler
+	internalReplicationHandler *handler.InternalReplicationHandler
+	web3Handler                *handler.Web3Handler
+	emailAuthHandler           *handler.EmailAuthHandler
+	assetsHandler              *handler.AssetsHandler
+	webdavHandler              *handler.WebDAVHandler
+	quotaHandler               *handler.QuotaHandler
+	userHandler                *handler.UserHandler
+	adminUserHandler           *handler.AdminUserHandler
+	recycleHandler             *handler.RecycleHandler
+	shareHandler               *handler.ShareHandler
+	shareUserHandler           *handler.ShareUserHandler
+	addressBookHandler         *handler.AddressBookHandler
+	logger                     *zap.Logger
 }
 
 // NewRouter 创建路由器
@@ -35,6 +36,7 @@ func NewRouter(
 	cfg *config.Config,
 	authenticators []auth.Authenticator,
 	healthHandler *handler.HealthHandler,
+	internalReplicationHandler *handler.InternalReplicationHandler,
 	web3Handler *handler.Web3Handler,
 	emailAuthHandler *handler.EmailAuthHandler,
 	assetsHandler *handler.AssetsHandler,
@@ -49,21 +51,22 @@ func NewRouter(
 	logger *zap.Logger,
 ) *Router {
 	return &Router{
-		config:             cfg,
-		authenticators:     authenticators,
-		healthHandler:      healthHandler,
-		web3Handler:        web3Handler,
-		emailAuthHandler:   emailAuthHandler,
-		assetsHandler:      assetsHandler,
-		webdavHandler:      webdavHandler,
-		quotaHandler:       quotaHandler,
-		userHandler:        userHandler,
-		adminUserHandler:   adminUserHandler,
-		recycleHandler:     recycleHandler,
-		shareHandler:       shareHandler,
-		shareUserHandler:   shareUserHandler,
-		addressBookHandler: addressBookHandler,
-		logger:             logger,
+		config:                     cfg,
+		authenticators:             authenticators,
+		healthHandler:              healthHandler,
+		internalReplicationHandler: internalReplicationHandler,
+		web3Handler:                web3Handler,
+		emailAuthHandler:           emailAuthHandler,
+		assetsHandler:              assetsHandler,
+		webdavHandler:              webdavHandler,
+		quotaHandler:               quotaHandler,
+		userHandler:                userHandler,
+		adminUserHandler:           adminUserHandler,
+		recycleHandler:             recycleHandler,
+		shareHandler:               shareHandler,
+		shareUserHandler:           shareUserHandler,
+		addressBookHandler:         addressBookHandler,
+		logger:                     logger,
 	}
 }
 
@@ -73,6 +76,13 @@ func (r *Router) Setup() http.Handler {
 
 	// 健康检查路由（无需认证）
 	mux.HandleFunc("/api/v1/public/health/heartbeat", r.healthHandler.Handle)
+	mux.HandleFunc("/api/v1/public/health/readiness", r.healthHandler.HandleReadiness)
+	if r.internalReplicationHandler != nil {
+		mux.Handle("/api/v1/internal/replication/fs/apply", r.createInternalHandler(http.HandlerFunc(r.internalReplicationHandler.HandleFSApply)))
+		mux.Handle("/api/v1/internal/replication/file", r.createInternalHandler(http.HandlerFunc(r.internalReplicationHandler.HandleFileApply)))
+		mux.Handle("/api/v1/internal/replication/status", r.createInternalHandler(http.HandlerFunc(r.internalReplicationHandler.HandleStatus)))
+		mux.Handle("/api/v1/internal/replication/bootstrap/mark", r.createInternalHandler(http.HandlerFunc(r.internalReplicationHandler.HandleBootstrapMark)))
+	}
 
 	// Web3 认证路由（无需认证）
 	mux.HandleFunc("/api/v1/public/auth/challenge", r.web3Handler.HandleChallenge)
@@ -157,6 +167,12 @@ func (r *Router) createAdminHandler(handler http.Handler) http.Handler {
 	adminMiddleware := middleware.NewAdminMiddleware(r.config.Security.AdminAddresses, r.logger)
 	authMiddleware := middleware.NewAuthMiddleware(r.authenticators, true, r.logger)
 	return authMiddleware.Handle(adminMiddleware.Handle(handler))
+}
+
+// createInternalHandler creates handlers used only for internal service-to-service traffic.
+func (r *Router) createInternalHandler(handler http.Handler) http.Handler {
+	internalMiddleware := middleware.NewInternalAuthMiddleware(r.config.Internal.Replication, r.logger)
+	return internalMiddleware.Handle(handler)
 }
 
 // applyMiddlewares 应用全局中间件

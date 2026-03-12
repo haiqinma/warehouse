@@ -35,3 +35,4 @@ test_data/
 config.yaml
 build
 output/
+.tmp/

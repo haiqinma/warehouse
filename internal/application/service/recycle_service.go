@@ -20,24 +20,30 @@ import (
 
 // RecycleService 回收站服务
 type RecycleService struct {
-	recycleRepo repository.RecycleRepository
-	userRepo    user.Repository
-	config      *config.Config
-	logger      *zap.Logger
+	recycleRepo      repository.RecycleRepository
+	userRepo         user.Repository
+	mutationRecorder MutationRecorder
+	config           *config.Config
+	logger           *zap.Logger
 }
 
 // NewRecycleService 创建回收站服务
 func NewRecycleService(
 	recycleRepo repository.RecycleRepository,
 	userRepo user.Repository,
+	mutationRecorder MutationRecorder,
 	cfg *config.Config,
 	logger *zap.Logger,
 ) *RecycleService {
+	if mutationRecorder == nil {
+		mutationRecorder = noopMutationRecorder{}
+	}
 	return &RecycleService{
-		recycleRepo: recycleRepo,
-		userRepo:    userRepo,
-		config:      cfg,
-		logger:      logger,
+		recycleRepo:      recycleRepo,
+		userRepo:         userRepo,
+		mutationRecorder: mutationRecorder,
+		config:           cfg,
+		logger:           logger,
 	}
 }
 
@@ -172,8 +178,18 @@ func (s *RecycleService) Recover(ctx context.Context, u *user.User, hash string)
 	if err != nil {
 		return fmt.Errorf("failed to locate recycle file: %w", err)
 	}
+	recycleInfo, err := os.Stat(recyclePath)
+	if err != nil {
+		return fmt.Errorf("failed to stat recycle file: %w", err)
+	}
 	if err := os.Rename(recyclePath, fullPath); err != nil {
 		return fmt.Errorf("failed to restore file: %w", err)
+	}
+	if err := s.mutationRecorder.EnsureDir(ctx, targetDir); err != nil {
+		return fmt.Errorf("failed to record target directory ensure event: %w", err)
+	}
+	if err := s.mutationRecorder.MovePath(ctx, recyclePath, fullPath, recycleInfo.IsDir()); err != nil {
+		return fmt.Errorf("failed to record recycle recover event: %w", err)
 	}
 
 	s.logger.Info("recovering file",
@@ -208,8 +224,15 @@ func (s *RecycleService) Remove(ctx context.Context, u *user.User, hash string) 
 
 	// 删除回收站中的实际文件
 	if recyclePath, err := s.findRecyclePath(item); err == nil {
+		isDir := false
+		if info, statErr := os.Stat(recyclePath); statErr == nil {
+			isDir = info.IsDir()
+		}
 		if err := os.RemoveAll(recyclePath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("failed to delete recycle file: %w", err)
+		}
+		if err := s.mutationRecorder.RemovePath(ctx, recyclePath, isDir); err != nil {
+			return fmt.Errorf("failed to record recycle remove event: %w", err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("failed to locate recycle file: %w", err)
@@ -247,7 +270,17 @@ func (s *RecycleService) Clear(ctx context.Context, u *user.User) (int, error) {
 			continue
 		}
 		if recyclePath, err := s.findRecyclePath(item); err == nil {
+			isDir := false
+			if info, statErr := os.Stat(recyclePath); statErr == nil {
+				isDir = info.IsDir()
+			}
 			if err := os.RemoveAll(recyclePath); err != nil && !os.IsNotExist(err) {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			if err := s.mutationRecorder.RemovePath(ctx, recyclePath, isDir); err != nil {
 				if firstErr == nil {
 					firstErr = err
 				}

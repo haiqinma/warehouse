@@ -49,18 +49,19 @@ warehouse -c config.yaml
 
 ## Deployment Options
 
+### Start From `config.yaml.template`
+
+- Use the repository root `config.yaml.template` as the baseline and produce an environment-specific `config.yaml`
+- Before deployment, verify at least:
+  - `database.*` points to a reachable PostgreSQL instance
+  - `webdav.directory` points to the real data directory
+  - `web3.jwt_secret` is replaced with a real secret
+  - for stage-1 active/standby, `node.*` and `internal.replication.*` are filled correctly
+
 ### Direct Binary
 
-- Build via `go build -o build/warehouse cmd/server/main.go`, then run `build/warehouse`
-- Use systemd/supervisor for process management
-
-### Container (Docker / Compose)
-
-- `Dockerfile` and `docker-compose.yml` are provided
-- Key points:
-  - mount `config.yaml`
-  - mount the data directory (`webdav.directory`)
-  - ensure PostgreSQL connectivity
+- Build via `go build -o build/warehouse ./cmd/warehouse`, then run `build/warehouse`
+- Use systemd/supervisor or an equivalent process manager
 
 ### Reverse Proxy
 

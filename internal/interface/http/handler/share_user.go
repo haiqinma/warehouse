@@ -23,14 +23,24 @@ import (
 type ShareUserHandler struct {
 	shareUserService *service.ShareUserService
 	userRepo         user.Repository
+	mutationRecorder service.MutationRecorder
 	logger           *zap.Logger
 }
 
 // NewShareUserHandler 创建定向分享处理器
-func NewShareUserHandler(shareUserService *service.ShareUserService, userRepo user.Repository, logger *zap.Logger) *ShareUserHandler {
+func NewShareUserHandler(
+	shareUserService *service.ShareUserService,
+	userRepo user.Repository,
+	mutationRecorder service.MutationRecorder,
+	logger *zap.Logger,
+) *ShareUserHandler {
+	if mutationRecorder == nil {
+		mutationRecorder = service.NewMutationRecorder(nil, nil, nil)
+	}
 	return &ShareUserHandler{
 		shareUserService: shareUserService,
 		userRepo:         userRepo,
+		mutationRecorder: mutationRecorder,
 		logger:           logger,
 	}
 }
@@ -538,6 +548,16 @@ func (h *ShareUserHandler) HandleUpload(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Failed to write file", http.StatusInternalServerError)
 		return
 	}
+	if err := h.mutationRecorder.EnsureDir(r.Context(), filepath.Dir(fullPath)); err != nil {
+		h.logger.Error("failed to record share upload parent dir mutation", zap.Error(err))
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if err := h.mutationRecorder.UpsertFile(r.Context(), fullPath); err != nil {
+		h.logger.Error("failed to record share upload mutation", zap.Error(err))
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte(`{"message":"uploaded successfully"}`)); err != nil {
@@ -597,6 +617,11 @@ func (h *ShareUserHandler) HandleCreateFolder(w http.ResponseWriter, r *http.Req
 
 	if err := os.MkdirAll(fullPath, 0755); err != nil {
 		http.Error(w, "Failed to create folder", http.StatusInternalServerError)
+		return
+	}
+	if err := h.mutationRecorder.EnsureDir(r.Context(), fullPath); err != nil {
+		h.logger.Error("failed to record share create folder mutation", zap.Error(err))
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -661,9 +686,24 @@ func (h *ShareUserHandler) HandleRename(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	info, err := os.Stat(fromPath)
+	if err != nil {
+		http.Error(w, "Failed to stat source", http.StatusInternalServerError)
+		return
+	}
 
 	if err := os.Rename(fromPath, toPath); err != nil {
 		http.Error(w, "Failed to rename", http.StatusInternalServerError)
+		return
+	}
+	if err := h.mutationRecorder.EnsureDir(r.Context(), filepath.Dir(toPath)); err != nil {
+		h.logger.Error("failed to record share rename parent dir mutation", zap.Error(err))
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if err := h.mutationRecorder.MovePath(r.Context(), fromPath, toPath, info.IsDir()); err != nil {
+		h.logger.Error("failed to record share rename mutation", zap.Error(err))
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -722,9 +762,23 @@ func (h *ShareUserHandler) HandleDelete(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "Not Found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to stat target", http.StatusInternalServerError)
+		return
+	}
 
 	if err := os.RemoveAll(fullPath); err != nil {
 		http.Error(w, "Failed to delete", http.StatusInternalServerError)
+		return
+	}
+	if err := h.mutationRecorder.RemovePath(r.Context(), fullPath, info.IsDir()); err != nil {
+		h.logger.Error("failed to record share delete mutation", zap.Error(err))
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 

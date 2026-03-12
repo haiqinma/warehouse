@@ -9,7 +9,9 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/yeying-community/warehouse/internal/container"
+	apphealth "github.com/yeying-community/warehouse/internal/health"
 	"github.com/yeying-community/warehouse/internal/infrastructure/config"
+	"github.com/yeying-community/warehouse/internal/infrastructure/database"
 	"go.uber.org/zap"
 )
 
@@ -37,6 +39,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if checkReady, _ := flags.GetBool("check-ready"); checkReady {
+		if err := runReadinessCheck(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "Readiness check failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("ready")
+		os.Exit(0)
+	}
+
 	// 创建容器
 	c, err := container.NewContainer(cfg)
 	if err != nil {
@@ -53,6 +64,17 @@ func main() {
 	// 打印启动信息
 	printStartupInfo(c)
 
+	backgroundCtx, stopBackground := context.WithCancel(context.Background())
+	backgroundDone := make(chan struct{})
+	if c.ReplicationWorker != nil && c.ReplicationWorker.Enabled() {
+		go func() {
+			defer close(backgroundDone)
+			c.ReplicationWorker.Run(backgroundCtx)
+		}()
+	} else {
+		close(backgroundDone)
+	}
+
 	// 启动服务器
 	serverErrors := make(chan error, 1)
 	go func() {
@@ -61,7 +83,7 @@ func main() {
 	}()
 
 	// 等待中断信号或服务器错误
-	waitForShutdown(c, serverErrors)
+	waitForShutdown(c, serverErrors, stopBackground, backgroundDone)
 }
 
 // parseFlags 解析命令行参数
@@ -72,6 +94,7 @@ func parseFlags() *pflag.FlagSet {
 	flags.StringP("config", "c", "", "Config file path")
 	flags.BoolP("version", "v", false, "Show version")
 	flags.BoolP("help", "h", false, "Show help")
+	flags.Bool("check-ready", false, "Run dependency readiness check and exit")
 
 	// 服务器选项
 	flags.String("address", "", "Server address")
@@ -194,8 +217,39 @@ func printHelp(flags *pflag.FlagSet) {
 	fmt.Println("  # Start with PostgreSQL")
 	fmt.Println("  warehouse -c config.yaml --db-type postgres --db-host localhost")
 	fmt.Println()
+	fmt.Println("  # Run readiness check")
+	fmt.Println("  warehouse -c config.yaml --check-ready")
+	fmt.Println()
 	fmt.Println("  # Show version")
 	fmt.Println("  warehouse --version")
+}
+
+func runReadinessCheck(cfg *config.Config) error {
+	db, err := database.NewPostgresDB(cfg.Database)
+	if err != nil {
+		return fmt.Errorf("connect database: %w", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	checker := apphealth.NewReadinessChecker(db.DB, cfg.WebDAV.Directory)
+	result := checker.Check(context.Background())
+	if !result.Ready() {
+		return fmt.Errorf("%s", formatReadinessResult(result))
+	}
+	return nil
+}
+
+func formatReadinessResult(result apphealth.Result) string {
+	message := result.Status
+	for _, check := range result.Checks {
+		if check.Status == apphealth.StatusReady {
+			continue
+		}
+		message = fmt.Sprintf("%s: %s=%s", message, check.Name, check.Error)
+	}
+	return message
 }
 
 // printStartupInfo 打印启动信息
@@ -230,6 +284,19 @@ func printStartupInfo(c *container.Container) {
 		zap.Int("port", c.Config.Database.Port),
 		zap.String("database", c.Config.Database.Database))
 
+	// 节点与内部复制信息
+	c.Logger.Info("node",
+		zap.String("id", c.Config.Node.ID),
+		zap.String("role", c.Config.Node.Role))
+	c.Logger.Info("internal_replication",
+		zap.Bool("enabled", c.Config.Internal.Replication.Enabled),
+		zap.String("peer_node_id", c.Config.Internal.Replication.PeerNodeID),
+		zap.String("peer_base_url", c.Config.Internal.Replication.PeerBaseURL),
+		zap.Duration("dispatch_interval", c.Config.Internal.Replication.DispatchInterval),
+		zap.Duration("request_timeout", c.Config.Internal.Replication.RequestTimeout),
+		zap.Int("batch_size", c.Config.Internal.Replication.BatchSize),
+		zap.Bool("worker_enabled", c.ReplicationWorker != nil && c.ReplicationWorker.Enabled()))
+
 	// Web3 信息
 	c.Logger.Info("web3",
 		zap.Duration("token_expiration", c.Config.Web3.TokenExpiration))
@@ -249,10 +316,11 @@ func printStartupInfo(c *container.Container) {
 }
 
 // waitForShutdown 等待关闭信号
-func waitForShutdown(c *container.Container, serverErrors <-chan error) {
+func waitForShutdown(c *container.Container, serverErrors <-chan error, stopBackground context.CancelFunc, backgroundDone <-chan struct{}) {
 	// 监听系统信号
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(quit)
 
 	// 等待信号或错误
 	select {
@@ -270,6 +338,18 @@ func waitForShutdown(c *container.Container, serverErrors <-chan error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), c.Config.Server.ShutdownTimeout)
 	defer cancel()
+
+	if stopBackground != nil {
+		stopBackground()
+	}
+	if backgroundDone != nil {
+		select {
+		case <-backgroundDone:
+			c.Logger.Info("background components stopped")
+		case <-ctx.Done():
+			c.Logger.Warn("timed out waiting for background components to stop")
+		}
+	}
 
 	if err := c.Server.Shutdown(ctx); err != nil {
 		c.Logger.Error("failed to shutdown server gracefully", zap.Error(err))

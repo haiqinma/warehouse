@@ -13,7 +13,7 @@ COPY ./go.sum ./
 RUN go mod download
 
 COPY . /warehouse/
-RUN go build -o main -trimpath -ldflags="-s -w -X 'main.version=$VERSION'" ./cmd/server
+RUN go build -o main -trimpath -ldflags="-s -w -X 'main.version=$VERSION'" ./cmd/warehouse
 
 FROM scratch
 

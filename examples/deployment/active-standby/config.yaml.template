@@ -1,0 +1,96 @@
+# Stage-1 HA deployment example
+# Use the same database topology / jwt secret / logical webdav path on both active and standby nodes.
+# Each node mounts its own local data disk at /data, and file replication is driven by internal replication APIs.
+
+server:
+  address: "0.0.0.0"
+  port: 6065
+  tls: false
+  cert_file: ""
+  key_file: ""
+  read_timeout: 30s
+  write_timeout: 30s
+  idle_timeout: 60s
+  shutdown_timeout: 10s
+
+database:
+  type: "postgres"
+  host: "postgres.internal"
+  port: 5432
+  username: "warehouse"
+  password: "replace-me"
+  database: "warehouse"
+  ssl_mode: "require"
+  max_open_conns: 25
+  max_idle_conns: 5
+  max_lifetime: 5m
+
+node:
+  id: "warehouse-active"
+  role: "active"
+
+internal:
+  replication:
+    enabled: true
+    peer_node_id: "warehouse-standby"
+    peer_base_url: "https://warehouse-standby.internal"
+    shared_secret: "replace-with-a-shared-internal-secret"
+    allowed_clock_skew: 30s
+    dispatch_interval: 2s
+    request_timeout: 30s
+    batch_size: 32
+    retry_backoff_base: 2s
+    max_retry_backoff: 5m
+
+webdav:
+  prefix: "/dav"
+  directory: "/data"
+  auto_create_directory: false
+  no_sniff: true
+  permissions: "R"
+
+web3:
+  jwt_secret: "replace-with-the-same-secret-on-both-nodes-at-least-32-characters"
+  token_expiration: 24h
+  refresh_token_expiration: 720h
+  auto_create_on_challenge: true
+  auto_create_on_ucan: true
+  ucan:
+    enabled: true
+    audience: "did:web:webdav.example.com"
+    required_resource: "app:*"
+    required_action: "read,write"
+    app_scope:
+      path_prefix: "/apps"
+
+email:
+  enabled: false
+  smtp_host: "smtp.example.com"
+  smtp_port: 587
+  smtp_username: ""
+  smtp_password: ""
+  from: "noreply@example.com"
+  from_name: "Warehouse"
+  template_path: "resources/email/email_code_login_mail_template_zh-CN.html"
+  code_ttl: 5m
+  send_interval: 60s
+  code_length: 6
+  auto_create_on_login: true
+  use_tls: false
+  insecure_skip_verify: false
+
+security:
+  no_password: false
+  behind_proxy: true
+  admin_addresses: []
+
+cors:
+  enabled: false
+  credentials: false
+
+log:
+  level: "info"
+  format: "json"
+  colors: false
+  outputs:
+    - "stderr"

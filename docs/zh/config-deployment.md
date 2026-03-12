@@ -27,7 +27,7 @@
 
 - `server`：监听地址、端口、TLS、超时
 - `database`：PostgreSQL 连接信息与连接池
-- `webdav`：根目录、前缀、NoSniff
+- `webdav`：根目录、前缀、目录自动创建、NoSniff
 - `web3`：JWT 秘钥、Token 过期时间、UCAN 规则
 - `email`：邮箱验证码登录（SMTP、模板、TTL、频率）
 - `security`：无密码模式、反向代理标记、管理员地址白名单
@@ -49,18 +49,19 @@ warehouse -c config.yaml
 
 ## 部署方式
 
+### 统一从 `config.yaml.template` 出发
+
+- 建议以仓库根目录下的 `config.yaml.template` 为基础，生成当前环境自己的 `config.yaml`
+- 部署时重点确认：
+  - `database.*` 已指向可用的 PostgreSQL
+  - `webdav.directory` 已指向真实数据目录
+  - `web3.jwt_secret` 已替换为真实密钥
+  - 阶段一 active/standby 场景下，`node.*` 与 `internal.replication.*` 已正确填写
+
 ### 二进制直接部署
 
-- 使用 `go build -o build/warehouse cmd/server/main.go` 构建后，再通过 `build/warehouse` 启动
-- 建议由 systemd/supervisor 进行守护
-
-### 容器部署（Docker / Compose）
-
-- `Dockerfile` 与 `docker-compose.yml` 提供容器化部署方式
-- 关键点：
-  - 挂载 `config.yaml`
-  - 挂载数据目录（`webdav.directory`）
-  - 确保 PostgreSQL 可访问
+- 使用 `go build -o build/warehouse ./cmd/warehouse` 构建后，再通过 `build/warehouse` 启动
+- 建议由 systemd/supervisor 或等效进程管理器进行守护
 
 ### 反向代理
 
@@ -75,4 +76,18 @@ warehouse -c config.yaml
 ## 启动检查
 
 - 健康检查：`/api/v1/public/health/heartbeat`
+- 就绪检查：`/api/v1/public/health/readiness`
+- CLI 就绪检查：`warehouse -c config.yaml --check-ready`
 - WebDAV 访问：使用 Basic 或 Bearer Token
+
+## 阶段一高可用提示
+
+如果正在落地 `1 active + 1 standby`：
+
+- `webdav.directory` 应指向每台机器自己的本地数据盘挂载目录
+- 两台机器应使用相同的路径约定，并通过 `internal` 同步或其他复制机制保证文件双份
+- `webdav.auto_create_directory` 应设为 `false`
+- 流量切换不能只看 `readiness`，还应结合复制 lag / 最后应用序号
+- 详细步骤参考：
+  - [ha-active-standby-deployment.md](./ha-active-standby-deployment.md)
+  - [internal-replication-design.md](./internal-replication-design.md)

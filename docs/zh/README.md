@@ -13,6 +13,10 @@
 - `webdav-flow.md`：WebDAV 请求处理流程与配额/权限/回收站
 - `data-model.md`：数据库表结构与关系
 - `share-recycle.md`：分享与回收站设计
+- `multi-instance-replica-design.md`：多实例 / 多副本部署方案与演进建议
+- `ha-active-standby-deployment.md`：阶段一高可用部署（active / standby）落地指南
+- `internal-replication-design.md`：阶段一 `internal` 复制版 standby 设计
+- `internal-replication-implementation-checklist.md`：阶段一 `internal` 复制实施清单
 - `asset-space-design.md`：登录后资产分层设计（个人资产 / 应用资产）
 - `asset-space-implementation-checklist.md`：资产分层落地任务清单（实施步骤与验收）
 

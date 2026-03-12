@@ -147,6 +147,36 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 			created_at TIMESTAMP NOT NULL DEFAULT NOW()
 		)`,
 
+		// 复制 outbox：active 记录文件变更，后台异步分发到 standby
+		`CREATE TABLE IF NOT EXISTS replication_outbox (
+			id BIGSERIAL PRIMARY KEY,
+			source_node_id TEXT NOT NULL,
+			target_node_id TEXT NOT NULL,
+			op TEXT NOT NULL,
+			path TEXT NULL,
+			from_path TEXT NULL,
+			to_path TEXT NULL,
+			is_dir BOOLEAN NOT NULL DEFAULT FALSE,
+			content_sha256 TEXT NULL,
+			file_size BIGINT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			attempt_count INT NOT NULL DEFAULT 0,
+			next_retry_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			last_error TEXT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			dispatched_at TIMESTAMP NULL
+		)`,
+
+		// 复制位点：记录 standby 已应用到哪个 outbox 序号
+		`CREATE TABLE IF NOT EXISTS replication_offsets (
+			source_node_id TEXT NOT NULL,
+			target_node_id TEXT NOT NULL,
+			last_applied_outbox_id BIGINT NOT NULL,
+			last_applied_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			PRIMARY KEY (source_node_id, target_node_id)
+		)`,
+
 		// 补充分享表字段（兼容已存在表）
 		`ALTER TABLE share_items ADD COLUMN IF NOT EXISTS view_count BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE share_items ADD COLUMN IF NOT EXISTS download_count BIGINT NOT NULL DEFAULT 0`,
@@ -181,6 +211,12 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_address_contacts_user_id ON address_contacts(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_address_contacts_group_id ON address_contacts(group_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_address_contacts_user_wallet ON address_contacts(user_id, wallet_address)`,
+
+		// 复制 outbox 索引
+		`CREATE INDEX IF NOT EXISTS idx_replication_outbox_pair_pending
+			ON replication_outbox(source_node_id, target_node_id, status, next_retry_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_replication_outbox_pair_created
+			ON replication_outbox(source_node_id, target_node_id, created_at)`,
 
 		// 兼容已有地址簿表
 		`ALTER TABLE address_contacts ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}'`,

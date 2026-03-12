@@ -9,7 +9,7 @@ This document summarizes the system architecture, component responsibilities, an
 
 ## Module Layout
 
-- `cmd/server`: process entry; parse flags, load config, start server
+- `cmd/warehouse`: process entry; parse flags, load config, start server
 - `internal/container`: DI container; wires all components
 - `internal/interface/http`: HTTP router, middleware, API/WebDAV handlers
 - `internal/application/service`: business services (WebDAV/share/recycle, etc.)
@@ -19,7 +19,7 @@ This document summarizes the system architecture, component responsibilities, an
 
 ## Startup Flow
 
-1. `cmd/server/main.go` parses flags and loads config (file + flags + env).
+1. `cmd/warehouse/main.go` parses flags and loads config (file + flags + env).
 2. `container.NewContainer` initializes in order:
    - Logger
    - PostgreSQL + migrations
@@ -37,7 +37,7 @@ Config validation highlights:
 
 ```mermaid
 flowchart TB
-    A[cmd/server/main.go] --> B[config.Loader.Load]
+    A[cmd/warehouse/main.go] --> B[config.Loader.Load]
     B --> C[container.NewContainer]
     C --> D[Logger]
     C --> E[PostgreSQL + Migrate]

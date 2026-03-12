@@ -10,6 +10,7 @@ import (
 	"github.com/yeying-community/warehouse/internal/domain/auth"
 	"github.com/yeying-community/warehouse/internal/domain/quota"
 	"github.com/yeying-community/warehouse/internal/domain/user"
+	apphealth "github.com/yeying-community/warehouse/internal/health"
 	infraAuth "github.com/yeying-community/warehouse/internal/infrastructure/auth"
 	"github.com/yeying-community/warehouse/internal/infrastructure/config"
 	"github.com/yeying-community/warehouse/internal/infrastructure/database"
@@ -37,10 +38,14 @@ type Container struct {
 	ShareRepository       repository.ShareRepository
 	UserShareRepository   repository.UserShareRepository
 	AddressBookRepository repository.AddressBookRepository
+	ReplicationOutboxRepo repository.ReplicationOutboxRepository
+	ReplicationOffsetRepo repository.ReplicationOffsetRepository
 
 	// Services
 	QuotaService       quota.Service
 	AssetSpaceManager  *assetspace.Manager
+	MutationRecorder   service.MutationRecorder
+	ReplicationWorker  *service.ReplicationWorker
 	WebDAVService      *service.WebDAVService
 	RecycleService     *service.RecycleService
 	ShareService       *service.ShareService
@@ -53,18 +58,19 @@ type Container struct {
 	Web3Auth       *infraAuth.Web3Authenticator
 
 	// Handlers
-	HealthHandler      *handler.HealthHandler
-	Web3Handler        *handler.Web3Handler
-	EmailAuthHandler   *handler.EmailAuthHandler
-	AssetsHandler      *handler.AssetsHandler
-	WebDAVHandler      *handler.WebDAVHandler
-	QuotaHandler       *handler.QuotaHandler
-	UserHandler        *handler.UserHandler
-	AdminUserHandler   *handler.AdminUserHandler
-	RecycleHandler     *handler.RecycleHandler
-	ShareHandler       *handler.ShareHandler
-	ShareUserHandler   *handler.ShareUserHandler
-	AddressBookHandler *handler.AddressBookHandler
+	HealthHandler              *handler.HealthHandler
+	InternalReplicationHandler *handler.InternalReplicationHandler
+	Web3Handler                *handler.Web3Handler
+	EmailAuthHandler           *handler.EmailAuthHandler
+	AssetsHandler              *handler.AssetsHandler
+	WebDAVHandler              *handler.WebDAVHandler
+	QuotaHandler               *handler.QuotaHandler
+	UserHandler                *handler.UserHandler
+	AdminUserHandler           *handler.AdminUserHandler
+	RecycleHandler             *handler.RecycleHandler
+	ShareHandler               *handler.ShareHandler
+	ShareUserHandler           *handler.ShareUserHandler
+	AddressBookHandler         *handler.AddressBookHandler
 
 	// HTTP
 	Router *http.Router
@@ -172,6 +178,9 @@ func (c *Container) initRepositories() error {
 	c.UserShareRepository = repository.NewPostgresUserShareRepository(c.DB.DB)
 	// 地址簿仓储
 	c.AddressBookRepository = repository.NewPostgresAddressBookRepository(c.DB.DB)
+	// 复制仓储
+	c.ReplicationOutboxRepo = repository.NewPostgresReplicationOutboxRepository(c.DB.DB)
+	c.ReplicationOffsetRepo = repository.NewPostgresReplicationOffsetRepository(c.DB.DB)
 
 	c.Logger.Info("using PostgreSQL user repository")
 	c.Logger.Info("repositories initialized")
@@ -181,6 +190,8 @@ func (c *Container) initRepositories() error {
 // initServices 初始化服务
 func (c *Container) initServices() error {
 	c.AssetSpaceManager = assetspace.NewManager(c.Config, c.Logger)
+	c.MutationRecorder = service.NewMutationRecorder(c.Config, c.ReplicationOutboxRepo, c.Logger)
+	c.ReplicationWorker = service.NewReplicationWorker(c.Config, c.ReplicationOutboxRepo, c.Logger)
 
 	// 配额服务
 	c.QuotaService = quota.NewService(c.UserRepository)
@@ -195,6 +206,7 @@ func (c *Container) initServices() error {
 		c.QuotaService,
 		c.UserRepository,
 		c.RecycleRepository,
+		c.MutationRecorder,
 		c.Logger,
 	)
 
@@ -202,6 +214,7 @@ func (c *Container) initServices() error {
 	c.RecycleService = service.NewRecycleService(
 		c.RecycleRepository,
 		c.UserRepository,
+		c.MutationRecorder,
 		c.Config,
 		c.Logger,
 	)
@@ -274,7 +287,16 @@ func (c *Container) initAuthenticators() error {
 // initHandlers 初始化处理器
 func (c *Container) initHandlers() error {
 	// 健康检查处理器
-	c.HealthHandler = handler.NewHealthHandler(c.Logger)
+	readinessChecker := apphealth.NewReadinessChecker(c.DB.DB, c.Config.WebDAV.Directory)
+	c.HealthHandler = handler.NewHealthHandler(c.Logger, readinessChecker)
+	if c.Config.Internal.Replication.Enabled {
+		c.InternalReplicationHandler = handler.NewInternalReplicationHandler(
+			c.Config,
+			c.Logger,
+			c.ReplicationOutboxRepo,
+			c.ReplicationOffsetRepo,
+		)
+	}
 
 	// 创建配额处理器
 	c.QuotaHandler = handler.NewQuotaHandler(c.QuotaService, c.Logger)
@@ -333,6 +355,7 @@ func (c *Container) initHandlers() error {
 	c.ShareUserHandler = handler.NewShareUserHandler(
 		c.ShareUserService,
 		c.UserRepository,
+		c.MutationRecorder,
 		c.Logger,
 	)
 	// 地址簿处理器
@@ -353,6 +376,7 @@ func (c *Container) initHTTP() error {
 		c.Config,
 		c.Authenticators,
 		c.HealthHandler,
+		c.InternalReplicationHandler,
 		c.Web3Handler,
 		c.EmailAuthHandler,
 		c.AssetsHandler,

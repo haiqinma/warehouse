@@ -18,11 +18,11 @@ cp config.yaml.template config.yaml
 
 ```shell
 # 启动时会自动检查并创建 webdav.directory 指定目录（如 ./test_data）
-go run cmd/server/main.go -c config.yaml
+go run ./cmd/warehouse -c config.yaml
 
 # 或者先编译后启动
 mkdir -p build
-go build -o build/warehouse cmd/server/main.go
+go build -o build/warehouse ./cmd/warehouse
 build/warehouse -c config.yaml
 
 ```
@@ -31,6 +31,10 @@ build/warehouse -c config.yaml
 
 ```shell
 curl http://127.0.0.1:6065/api/v1/public/health/heartbeat
+curl http://127.0.0.1:6065/api/v1/public/health/readiness
+
+# 或使用二进制直接做 readiness 检查
+build/warehouse -c config.yaml --check-ready
 ```
 
 ## API 文档
@@ -143,6 +147,74 @@ bash scripts/starter.sh restart
 - PID 文件：`run/warehouse.pid`
 - 日志文件：`logs/warehouse.log`
 
+## scripts/local.sh
+
+用于本地快速拉起 active / standby 调试实例，使用 `go run` 前台启动：
+
+```shell
+# 默认启动 active
+bash scripts/local.sh
+
+# 显式启动 active
+bash scripts/local.sh active
+
+# 启动 standby
+bash scripts/local.sh standby
+```
+
+说明：
+- 会从 `config.yaml.template` 生成本地配置到 `.tmp/active.yaml` 或 `.tmp/standby.yaml`
+- 数据目录分别使用 `.tmp/active/data` 和 `.tmp/standby/data`
+- 默认端口为 `6065`（active）和 `6066`（standby）
+- `.tmp/` 已加入 `.gitignore`
+- 可通过环境变量覆盖数据库和端口，例如 `DB_HOST`、`DB_PORT`、`ACTIVE_PORT`、`STANDBY_PORT`
+
+## 高可用部署提示
+
+如果准备落地 `1 active + 1 standby`：
+
+- `webdav.directory` 应指向每台机器自己的本地数据盘挂载目录
+- 当前阶段一推荐路线是：active 对外、standby 仅 internal，同步本地文件数据
+- 生产环境建议设置 `webdav.auto_create_directory: false`
+- 切换前除了检查 `/api/v1/public/health/readiness`，还要检查复制状态
+- 详细说明参考 [docs/zh/ha-active-standby-deployment.md](docs/zh/ha-active-standby-deployment.md)
+
+## scripts/bootstrap_standby.sh
+
+用于在 standby 完成离线全量拷贝后，调用 internal 接口写入 baseline，并立即查询复制状态：
+
+```shell
+bash scripts/bootstrap_standby.sh \
+  --standby-base-url https://warehouse-standby.internal \
+  --source-node-id warehouse-active \
+  --shared-secret replace-with-a-shared-internal-secret
+```
+
+如果要显式指定基线 outbox 序号：
+
+```shell
+bash scripts/bootstrap_standby.sh \
+  --standby-base-url https://warehouse-standby.internal \
+  --source-node-id warehouse-active \
+  --shared-secret replace-with-a-shared-internal-secret \
+  --outbox-id 12345
+```
+
+如果只想查看 standby 当前复制状态：
+
+```shell
+bash scripts/bootstrap_standby.sh \
+  --standby-base-url https://warehouse-standby.internal \
+  --source-node-id warehouse-active \
+  --shared-secret replace-with-a-shared-internal-secret \
+  --status-only
+```
+
+说明：
+- 脚本会自动按 internal HMAC 规则构造签名，不需要手工计算 header
+- 依赖 `curl`、`openssl`、`xxd`，若安装了 `jq` 会自动格式化 JSON 输出
+- `--outbox-id` 不传时，standby 会使用当前 source -> standby 的最大 outbox 序号作为 baseline
+
 ## scripts/package.sh
 
 用于构建前端 + 后端并生成安装包：
@@ -178,40 +250,3 @@ bash scripts/mount_davfs.sh umount /mnt/webdav
 - 缺少 `davfs2`（`mount.davfs`）时，脚本会在 Linux 上尝试自动安装
 - 账号密码写入 `/etc/davfs2/secrets`（`600` 权限）
 - `install-fstab` 默认写入 `nofail,_netdev`，避免开机网络未就绪导致启动失败
-
-# 用户相关的操作
-
-```shell
-# 查看所有用户
-./build/user -config config.yaml -action list
-
-# 添加用户
-./build/user -config config.yaml -action add \
-  -username alice \
-  -password secret123 \
-  -directory alice \
-  -permissions CRUD \
-  -quota 5368709120
-
-# 添加web3用户
-./build/user -config config.yaml -action add \
-  -username bob \
-  -wallet 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb \
-  -directory bob \
-  -permissions CRUD
-
-# 删除用户
-./build/user -config config.yaml -action delete \
-  -username alice
-
-# 更新用户
-./build/user -config config.yaml -action update \
-  -username alice \
-  -permissions RU \
-  -quota 10737418240
-
-# 重置密码
-./build/user -config config.yaml -action reset-password \
-  -username alice \
-  -password newsecret
-```
