@@ -46,6 +46,70 @@ func (r fakeReplicationOffsetReader) Upsert(_ context.Context, _ *replication.Of
 	return nil
 }
 
+type fakeReconcileStore struct {
+	latestJob *replication.ReconcileJob
+	items     []*replication.ReconcileItem
+}
+
+func (s *fakeReconcileStore) CreateJob(_ context.Context, job *replication.ReconcileJob) error {
+	job.ID = 1
+	now := time.Now()
+	job.CreatedAt = now
+	job.UpdatedAt = now
+	s.latestJob = &replication.ReconcileJob{
+		ID:                job.ID,
+		SourceNodeID:      job.SourceNodeID,
+		TargetNodeID:      job.TargetNodeID,
+		WatermarkOutboxID: job.WatermarkOutboxID,
+		Status:            job.Status,
+		ScannedItems:      job.ScannedItems,
+		PendingItems:      job.PendingItems,
+		StartedAt:         job.StartedAt,
+		CreatedAt:         job.CreatedAt,
+		UpdatedAt:         job.UpdatedAt,
+	}
+	return nil
+}
+
+func (s *fakeReconcileStore) ReplaceItems(_ context.Context, _ int64, items []*replication.ReconcileItem) error {
+	s.items = append([]*replication.ReconcileItem(nil), items...)
+	return nil
+}
+
+func (s *fakeReconcileStore) UpdateJobResult(_ context.Context, jobID int64, status string, scannedItems, pendingItems int64, completedAt *time.Time, lastError *string) error {
+	if s.latestJob == nil || s.latestJob.ID != jobID {
+		return replication.ErrReconcileJobNotFound
+	}
+	s.latestJob.Status = status
+	s.latestJob.ScannedItems = scannedItems
+	s.latestJob.PendingItems = pendingItems
+	s.latestJob.CompletedAt = completedAt
+	s.latestJob.LastError = lastError
+	return nil
+}
+
+func (s *fakeReconcileStore) GetLatestJob(_ context.Context, sourceNodeID, targetNodeID string) (*replication.ReconcileJob, error) {
+	if s.latestJob == nil {
+		return nil, replication.ErrReconcileJobNotFound
+	}
+	if s.latestJob.SourceNodeID != sourceNodeID || s.latestJob.TargetNodeID != targetNodeID {
+		return nil, fmt.Errorf("unexpected pair %s -> %s", sourceNodeID, targetNodeID)
+	}
+	return s.latestJob, nil
+}
+
+type fakeReconcileScanner struct {
+	items []*replication.ReconcileItem
+	err   error
+}
+
+func (s fakeReconcileScanner) Scan(_ context.Context) ([]*replication.ReconcileItem, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]*replication.ReconcileItem(nil), s.items...), nil
+}
+
 func TestInternalReplicationHandleStatusActive(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Node.ID = "node-a"
@@ -89,6 +153,8 @@ func TestInternalReplicationHandleStatusActive(t *testing.T) {
 				LastAppliedOutboxID: lastApplied,
 			},
 		},
+		nil,
+		nil,
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/internal/replication/status", nil)
@@ -180,6 +246,8 @@ func TestInternalReplicationHandleStatusStandbyUsesReversePair(t *testing.T) {
 				LastAppliedOutboxID: lastApplied,
 			},
 		},
+		nil,
+		nil,
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/internal/replication/status", nil)
@@ -234,6 +302,8 @@ func TestInternalReplicationHandleStatusStandbyBootstrapRequired(t *testing.T) {
 			expectedTarget: "node-b",
 			err:            replication.ErrOffsetNotFound,
 		},
+		nil,
+		nil,
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/internal/replication/status", nil)
@@ -274,6 +344,8 @@ func TestInternalReplicationHandleBootstrapMarkWithExplicitOutboxID(t *testing.T
 			summary:        &replication.OutboxStatus{},
 		},
 		offsets,
+		nil,
+		nil,
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/internal/replication/bootstrap/mark", bytes.NewBufferString(`{"outboxId":7}`))
@@ -324,6 +396,8 @@ func TestInternalReplicationHandleBootstrapMarkUsesCurrentLastOutboxID(t *testin
 			},
 		},
 		offsets,
+		nil,
+		nil,
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/internal/replication/bootstrap/mark", bytes.NewBufferString(`{}`))
@@ -370,6 +444,8 @@ func TestInternalReplicationHandleBootstrapMarkRejectsBackwardOffset(t *testing.
 			summary:        &replication.OutboxStatus{},
 		},
 		offsets,
+		nil,
+		nil,
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/internal/replication/bootstrap/mark", bytes.NewBufferString(`{"outboxId":8}`))
@@ -389,5 +465,73 @@ func TestInternalReplicationHandleBootstrapMarkRejectsBackwardOffset(t *testing.
 	}
 	if offset.LastAppliedOutboxID != 9 {
 		t.Fatalf("offset should not move backwards: %#v", offset)
+	}
+}
+
+func TestInternalReplicationHandleReconcileStart(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Node.ID = "node-a"
+	cfg.Node.Role = "active"
+	cfg.Internal.Replication.Enabled = true
+	cfg.Internal.Replication.PeerNodeID = "node-b"
+
+	lastOutboxID := int64(15)
+	reconcileStore := &fakeReconcileStore{}
+	handler := NewInternalReplicationHandler(
+		cfg,
+		zap.NewNop(),
+		fakeReplicationOutboxReader{
+			expectedSource: "node-a",
+			expectedTarget: "node-b",
+			summary: &replication.OutboxStatus{
+				LastOutboxID: &lastOutboxID,
+			},
+		},
+		nil,
+		reconcileStore,
+		fakeReconcileScanner{
+			items: []*replication.ReconcileItem{
+				{Path: "/history", IsDir: true, State: replication.ReconcileItemStatePending},
+				{Path: "/history/a.txt", IsDir: false, State: replication.ReconcileItemStatePending},
+			},
+		},
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/internal/replication/reconcile/start", bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.HandleReconcileStart(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var startResp internalReconcileStartResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &startResp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if !startResp.Success || startResp.Status != replication.ReconcileJobStatusReady {
+		t.Fatalf("unexpected start response: %#v", startResp)
+	}
+	if startResp.WatermarkOutboxID != 15 || startResp.ScannedItems != 2 || startResp.PendingItems != 2 {
+		t.Fatalf("unexpected reconcile counters: %#v", startResp)
+	}
+	if len(reconcileStore.items) != 2 {
+		t.Fatalf("expected 2 reconcile items, got %d", len(reconcileStore.items))
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/api/v1/internal/replication/status", nil)
+	statusRecorder := httptest.NewRecorder()
+	handler.HandleStatus(statusRecorder, statusReq)
+	if statusRecorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", statusRecorder.Code, statusRecorder.Body.String())
+	}
+
+	var statusResp internalReplicationStatusResponse
+	if err := json.Unmarshal(statusRecorder.Body.Bytes(), &statusResp); err != nil {
+		t.Fatalf("unmarshal status response: %v", err)
+	}
+	if statusResp.Reconcile == nil || statusResp.Reconcile.Status != replication.ReconcileJobStatusReady {
+		t.Fatalf("expected reconcile status ready, got %#v", statusResp.Reconcile)
 	}
 }

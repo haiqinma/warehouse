@@ -27,6 +27,14 @@ type ReplicationOffsetRepository interface {
 	Get(ctx context.Context, sourceNodeID, targetNodeID string) (*replication.Offset, error)
 }
 
+// ReplicationReconcileRepository stores historical reconcile jobs and pending items.
+type ReplicationReconcileRepository interface {
+	CreateJob(ctx context.Context, job *replication.ReconcileJob) error
+	ReplaceItems(ctx context.Context, jobID int64, items []*replication.ReconcileItem) error
+	UpdateJobResult(ctx context.Context, jobID int64, status string, scannedItems, pendingItems int64, completedAt *time.Time, lastError *string) error
+	GetLatestJob(ctx context.Context, sourceNodeID, targetNodeID string) (*replication.ReconcileJob, error)
+}
+
 // PostgresReplicationOutboxRepository is the PostgreSQL implementation.
 type PostgresReplicationOutboxRepository struct {
 	db *sql.DB
@@ -34,6 +42,11 @@ type PostgresReplicationOutboxRepository struct {
 
 // PostgresReplicationOffsetRepository is the PostgreSQL implementation.
 type PostgresReplicationOffsetRepository struct {
+	db *sql.DB
+}
+
+// PostgresReplicationReconcileRepository is the PostgreSQL implementation.
+type PostgresReplicationReconcileRepository struct {
 	db *sql.DB
 }
 
@@ -45,6 +58,11 @@ func NewPostgresReplicationOutboxRepository(db *sql.DB) *PostgresReplicationOutb
 // NewPostgresReplicationOffsetRepository creates an offset repository.
 func NewPostgresReplicationOffsetRepository(db *sql.DB) *PostgresReplicationOffsetRepository {
 	return &PostgresReplicationOffsetRepository{db: db}
+}
+
+// NewPostgresReplicationReconcileRepository creates a reconcile repository.
+func NewPostgresReplicationReconcileRepository(db *sql.DB) *PostgresReplicationReconcileRepository {
+	return &PostgresReplicationReconcileRepository{db: db}
 }
 
 // Append inserts a new durable replication event.
@@ -335,6 +353,144 @@ func (r *PostgresReplicationOffsetRepository) Get(ctx context.Context, sourceNod
 	}
 
 	return offset, nil
+}
+
+// CreateJob inserts one historical reconcile job.
+func (r *PostgresReplicationReconcileRepository) CreateJob(ctx context.Context, job *replication.ReconcileJob) error {
+	startedAt := job.StartedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now()
+	}
+
+	query := `
+		INSERT INTO replication_reconcile_jobs (
+			source_node_id, target_node_id, watermark_outbox_id, status,
+			scanned_items, pending_items, started_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, created_at, updated_at
+	`
+	err := r.db.QueryRowContext(ctx, query,
+		job.SourceNodeID,
+		job.TargetNodeID,
+		job.WatermarkOutboxID,
+		job.Status,
+		job.ScannedItems,
+		job.PendingItems,
+		startedAt,
+	).Scan(&job.ID, &job.CreatedAt, &job.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("failed to create replication reconcile job: %w", err)
+	}
+	if job.StartedAt.IsZero() {
+		job.StartedAt = startedAt
+	}
+
+	return nil
+}
+
+// ReplaceItems replaces all reconcile items for one job.
+func (r *PostgresReplicationReconcileRepository) ReplaceItems(ctx context.Context, jobID int64, items []*replication.ReconcileItem) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin reconcile items transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM replication_reconcile_items WHERE job_id = $1`, jobID); err != nil {
+		return fmt.Errorf("failed to clear reconcile items: %w", err)
+	}
+
+	if len(items) > 0 {
+		query := `
+			INSERT INTO replication_reconcile_items (
+				job_id, path, is_dir, file_size, modified_at, state
+			)
+			VALUES ($1, $2, $3, $4, $5, $6)
+		`
+		for _, item := range items {
+			if _, err := tx.ExecContext(ctx, query,
+				jobID,
+				item.Path,
+				item.IsDir,
+				item.FileSize,
+				item.ModifiedAt,
+				item.State,
+			); err != nil {
+				return fmt.Errorf("failed to insert reconcile item %q: %w", item.Path, err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit reconcile items: %w", err)
+	}
+	return nil
+}
+
+// UpdateJobResult updates one reconcile job status and counters.
+func (r *PostgresReplicationReconcileRepository) UpdateJobResult(ctx context.Context, jobID int64, status string, scannedItems, pendingItems int64, completedAt *time.Time, lastError *string) error {
+	query := `
+		UPDATE replication_reconcile_jobs
+		SET status = $2,
+			scanned_items = $3,
+			pending_items = $4,
+			completed_at = $5,
+			last_error = $6,
+			updated_at = NOW()
+		WHERE id = $1
+	`
+	result, err := r.db.ExecContext(ctx, query, jobID, status, scannedItems, pendingItems, completedAt, lastError)
+	if err != nil {
+		return fmt.Errorf("failed to update reconcile job result: %w", err)
+	}
+	if err := ensureAffectedRows(result, replication.ErrReconcileJobNotFound); err != nil {
+		return err
+	}
+	return nil
+}
+
+// GetLatestJob loads the latest reconcile job for one source->target pair.
+func (r *PostgresReplicationReconcileRepository) GetLatestJob(ctx context.Context, sourceNodeID, targetNodeID string) (*replication.ReconcileJob, error) {
+	query := `
+		SELECT id, source_node_id, target_node_id, watermark_outbox_id, status,
+		       scanned_items, pending_items, started_at, completed_at, last_error,
+		       created_at, updated_at
+		FROM replication_reconcile_jobs
+		WHERE source_node_id = $1
+		  AND target_node_id = $2
+		ORDER BY id DESC
+		LIMIT 1
+	`
+
+	job := &replication.ReconcileJob{}
+	var completedAt sql.NullTime
+	var lastError sql.NullString
+	err := r.db.QueryRowContext(ctx, query, sourceNodeID, targetNodeID).Scan(
+		&job.ID,
+		&job.SourceNodeID,
+		&job.TargetNodeID,
+		&job.WatermarkOutboxID,
+		&job.Status,
+		&job.ScannedItems,
+		&job.PendingItems,
+		&job.StartedAt,
+		&completedAt,
+		&lastError,
+		&job.CreatedAt,
+		&job.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, replication.ErrReconcileJobNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get latest reconcile job: %w", err)
+	}
+	if completedAt.Valid {
+		job.CompletedAt = &completedAt.Time
+	}
+	job.LastError = nullableString(lastError)
+	return job, nil
 }
 
 func scanOutboxEvent(scanner interface {

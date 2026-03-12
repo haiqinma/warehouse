@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -22,12 +23,25 @@ type replicationOffsetStore interface {
 	Upsert(ctx context.Context, offset *replication.Offset) error
 }
 
+type replicationReconcileStore interface {
+	CreateJob(ctx context.Context, job *replication.ReconcileJob) error
+	ReplaceItems(ctx context.Context, jobID int64, items []*replication.ReconcileItem) error
+	UpdateJobResult(ctx context.Context, jobID int64, status string, scannedItems, pendingItems int64, completedAt *time.Time, lastError *string) error
+	GetLatestJob(ctx context.Context, sourceNodeID, targetNodeID string) (*replication.ReconcileJob, error)
+}
+
+type replicationReconcileScanner interface {
+	Scan(ctx context.Context) ([]*replication.ReconcileItem, error)
+}
+
 // InternalReplicationHandler exposes replication-related internal control endpoints.
 type InternalReplicationHandler struct {
-	logger  *zap.Logger
-	config  *config.Config
-	outbox  replicationOutboxStatusReader
-	offsets replicationOffsetStore
+	logger           *zap.Logger
+	config           *config.Config
+	outbox           replicationOutboxStatusReader
+	offsets          replicationOffsetStore
+	reconcileStore   replicationReconcileStore
+	reconcileScanner replicationReconcileScanner
 }
 
 // NewInternalReplicationHandler creates a new internal replication handler.
@@ -36,18 +50,23 @@ func NewInternalReplicationHandler(
 	logger *zap.Logger,
 	outbox replicationOutboxStatusReader,
 	offsets replicationOffsetStore,
+	reconcileStore replicationReconcileStore,
+	reconcileScanner replicationReconcileScanner,
 ) *InternalReplicationHandler {
 	return &InternalReplicationHandler{
-		logger:  logger,
-		config:  cfg,
-		outbox:  outbox,
-		offsets: offsets,
+		logger:           logger,
+		config:           cfg,
+		outbox:           outbox,
+		offsets:          offsets,
+		reconcileStore:   reconcileStore,
+		reconcileScanner: reconcileScanner,
 	}
 }
 
 type internalReplicationStatusResponse struct {
-	Node        internalNodeStatus        `json:"node"`
-	Replication internalReplicationStatus `json:"replication"`
+	Node        internalNodeStatus          `json:"node"`
+	Replication internalReplicationStatus   `json:"replication"`
+	Reconcile   *internalReconcileJobStatus `json:"reconcile,omitempty"`
 }
 
 type internalNodeStatus struct {
@@ -73,6 +92,18 @@ type internalReplicationStatus struct {
 	NextRetryAt            *time.Time `json:"nextRetryAt,omitempty"`
 	LastError              *string    `json:"lastError,omitempty"`
 	Notes                  []string   `json:"notes,omitempty"`
+}
+
+type internalReconcileJobStatus struct {
+	Enabled           bool       `json:"enabled"`
+	LatestJobID       int64      `json:"latestJobId"`
+	Status            string     `json:"status"`
+	WatermarkOutboxID int64      `json:"watermarkOutboxId"`
+	ScannedItems      int64      `json:"scannedItems"`
+	PendingItems      int64      `json:"pendingItems"`
+	StartedAt         time.Time  `json:"startedAt"`
+	CompletedAt       *time.Time `json:"completedAt,omitempty"`
+	LastError         *string    `json:"lastError,omitempty"`
 }
 
 // HandleStatus returns the current internal replication configuration and persisted status summary.
@@ -149,9 +180,163 @@ func (h *InternalReplicationHandler) HandleStatus(w http.ResponseWriter, r *http
 		}
 	}
 
+	if h.reconcileStore != nil && sourceNodeID != "" && targetNodeID != "" {
+		job, err := h.reconcileStore.GetLatestJob(r.Context(), sourceNodeID, targetNodeID)
+		if err != nil {
+			if !errors.Is(err, replication.ErrReconcileJobNotFound) {
+				h.logger.Error("failed to load reconcile status",
+					zap.String("source_node_id", sourceNodeID),
+					zap.String("target_node_id", targetNodeID),
+					zap.Error(err))
+				h.writeError(w, http.StatusInternalServerError, "Failed to load reconcile status")
+				return
+			}
+		} else {
+			response.Reconcile = &internalReconcileJobStatus{
+				Enabled:           true,
+				LatestJobID:       job.ID,
+				Status:            job.Status,
+				WatermarkOutboxID: job.WatermarkOutboxID,
+				ScannedItems:      job.ScannedItems,
+				PendingItems:      job.PendingItems,
+				StartedAt:         job.StartedAt,
+				CompletedAt:       job.CompletedAt,
+				LastError:         job.LastError,
+			}
+		}
+	}
+
 	response.Replication.State = h.determineState(response.Replication)
 	response.Replication.Notes = h.buildNotes(response.Replication)
 	h.writeJSON(w, http.StatusOK, response)
+}
+
+type internalReconcileStartRequest struct {
+	TargetNodeID string `json:"targetNodeId,omitempty"`
+}
+
+type internalReconcileStartResponse struct {
+	Success           bool   `json:"success"`
+	JobID             int64  `json:"jobId"`
+	SourceNodeID      string `json:"sourceNodeId"`
+	TargetNodeID      string `json:"targetNodeId"`
+	WatermarkOutboxID int64  `json:"watermarkOutboxId"`
+	ScannedItems      int64  `json:"scannedItems"`
+	PendingItems      int64  `json:"pendingItems"`
+	Status            string `json:"status"`
+}
+
+// HandleReconcileStart scans active local data and persists a reconcile job with pending items.
+func (h *InternalReplicationHandler) HandleReconcileStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(h.config.Node.Role), "active") {
+		h.writeError(w, http.StatusConflict, "reconcile start is only available on active nodes")
+		return
+	}
+	if h.reconcileStore == nil || h.reconcileScanner == nil {
+		h.writeError(w, http.StatusConflict, "reconcile components are not configured")
+		return
+	}
+
+	var req internalReconcileStartRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		h.writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	targetNodeID := strings.TrimSpace(req.TargetNodeID)
+	if targetNodeID == "" {
+		targetNodeID = strings.TrimSpace(h.config.Internal.Replication.PeerNodeID)
+	}
+	if targetNodeID == "" {
+		h.writeError(w, http.StatusBadRequest, "targetNodeId is required")
+		return
+	}
+
+	watermarkOutboxID := int64(0)
+	if h.outbox != nil {
+		summary, err := h.outbox.GetStatusSummary(r.Context(), h.config.Node.ID, targetNodeID)
+		if err != nil {
+			h.logger.Error("failed to load outbox status before reconcile",
+				zap.String("source_node_id", h.config.Node.ID),
+				zap.String("target_node_id", targetNodeID),
+				zap.Error(err))
+			h.writeError(w, http.StatusInternalServerError, "Failed to load outbox status")
+			return
+		}
+		if summary != nil && summary.LastOutboxID != nil {
+			watermarkOutboxID = *summary.LastOutboxID
+		}
+	}
+
+	job := &replication.ReconcileJob{
+		SourceNodeID:      h.config.Node.ID,
+		TargetNodeID:      targetNodeID,
+		WatermarkOutboxID: watermarkOutboxID,
+		Status:            replication.ReconcileJobStatusRunning,
+		StartedAt:         time.Now(),
+	}
+	if err := h.reconcileStore.CreateJob(r.Context(), job); err != nil {
+		h.logger.Error("failed to create reconcile job",
+			zap.String("source_node_id", job.SourceNodeID),
+			zap.String("target_node_id", job.TargetNodeID),
+			zap.Error(err))
+		h.writeError(w, http.StatusInternalServerError, "Failed to create reconcile job")
+		return
+	}
+
+	items, err := h.reconcileScanner.Scan(r.Context())
+	if err != nil {
+		lastErr := err.Error()
+		_ = h.reconcileStore.UpdateJobResult(r.Context(), job.ID, replication.ReconcileJobStatusFailed, 0, 0, nil, &lastErr)
+		h.logger.Error("failed to scan local data for reconcile",
+			zap.Int64("job_id", job.ID),
+			zap.Error(err))
+		h.writeError(w, http.StatusInternalServerError, "Failed to scan local data")
+		return
+	}
+
+	if err := h.reconcileStore.ReplaceItems(r.Context(), job.ID, items); err != nil {
+		lastErr := err.Error()
+		_ = h.reconcileStore.UpdateJobResult(r.Context(), job.ID, replication.ReconcileJobStatusFailed, int64(len(items)), int64(len(items)), nil, &lastErr)
+		h.logger.Error("failed to persist reconcile items",
+			zap.Int64("job_id", job.ID),
+			zap.Error(err))
+		h.writeError(w, http.StatusInternalServerError, "Failed to persist reconcile items")
+		return
+	}
+
+	scannedItems := int64(len(items))
+	pendingItems := scannedItems
+	completedAt := time.Now()
+	if err := h.reconcileStore.UpdateJobResult(
+		r.Context(),
+		job.ID,
+		replication.ReconcileJobStatusReady,
+		scannedItems,
+		pendingItems,
+		&completedAt,
+		nil,
+	); err != nil {
+		h.logger.Error("failed to finalize reconcile job",
+			zap.Int64("job_id", job.ID),
+			zap.Error(err))
+		h.writeError(w, http.StatusInternalServerError, "Failed to finalize reconcile job")
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, internalReconcileStartResponse{
+		Success:           true,
+		JobID:             job.ID,
+		SourceNodeID:      job.SourceNodeID,
+		TargetNodeID:      job.TargetNodeID,
+		WatermarkOutboxID: watermarkOutboxID,
+		ScannedItems:      scannedItems,
+		PendingItems:      pendingItems,
+		Status:            replication.ReconcileJobStatusReady,
+	})
 }
 
 func (h *InternalReplicationHandler) replicationPair() (string, string) {

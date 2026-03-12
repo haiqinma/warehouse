@@ -53,7 +53,7 @@ func TestInternalReplicationHandleFSApplyEnsureDir(t *testing.T) {
 	cfg.Internal.Replication.PeerNodeID = "node-a"
 	cfg.WebDAV.Directory = root
 
-	handler := NewInternalReplicationHandler(cfg, zap.NewNop(), nil, offsets)
+	handler := NewInternalReplicationHandler(cfg, zap.NewNop(), nil, offsets, nil, nil)
 	body := bytes.NewBufferString(`{"outboxId":1,"op":"ensure_dir","path":"/alice/docs","isDir":true}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/internal/replication/fs/apply", body)
 	req.Header.Set(middleware.InternalNodeIDHeader, "node-a")
@@ -93,7 +93,7 @@ func TestInternalReplicationHandleFSApplyRejectsSequenceGap(t *testing.T) {
 	cfg.Internal.Replication.PeerNodeID = "node-a"
 	cfg.WebDAV.Directory = root
 
-	handler := NewInternalReplicationHandler(cfg, zap.NewNop(), nil, offsets)
+	handler := NewInternalReplicationHandler(cfg, zap.NewNop(), nil, offsets, nil, nil)
 	body := bytes.NewBufferString(`{"outboxId":3,"op":"ensure_dir","path":"/alice/docs","isDir":true}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/internal/replication/fs/apply", body)
 	req.Header.Set(middleware.InternalNodeIDHeader, "node-a")
@@ -123,7 +123,7 @@ func TestInternalReplicationHandleFileApplyWritesFileAndUpdatesOffset(t *testing
 	cfg.Internal.Replication.PeerNodeID = "node-a"
 	cfg.WebDAV.Directory = root
 
-	handler := NewInternalReplicationHandler(cfg, zap.NewNop(), nil, offsets)
+	handler := NewInternalReplicationHandler(cfg, zap.NewNop(), nil, offsets, nil, nil)
 	payload := []byte("replicated payload")
 	digest := sha256.Sum256(payload)
 	hashHex := hex.EncodeToString(digest[:])
@@ -178,7 +178,7 @@ func TestInternalReplicationHandleFileApplyAlreadyApplied(t *testing.T) {
 	cfg.Internal.Replication.PeerNodeID = "node-a"
 	cfg.WebDAV.Directory = root
 
-	handler := NewInternalReplicationHandler(cfg, zap.NewNop(), nil, offsets)
+	handler := NewInternalReplicationHandler(cfg, zap.NewNop(), nil, offsets, nil, nil)
 	digest := sha256.Sum256(payload)
 	hashHex := hex.EncodeToString(digest[:])
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/internal/replication/file?outboxId=4&path=/alice/file.txt&fileSize=18", bytes.NewReader(payload))

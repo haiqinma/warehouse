@@ -177,6 +177,36 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 			PRIMARY KEY (source_node_id, target_node_id)
 		)`,
 
+		// 历史补齐任务：记录每次 reconcile 运行情况
+		`CREATE TABLE IF NOT EXISTS replication_reconcile_jobs (
+			id BIGSERIAL PRIMARY KEY,
+			source_node_id TEXT NOT NULL,
+			target_node_id TEXT NOT NULL,
+			watermark_outbox_id BIGINT NOT NULL DEFAULT 0,
+			status TEXT NOT NULL,
+			scanned_items BIGINT NOT NULL DEFAULT 0,
+			pending_items BIGINT NOT NULL DEFAULT 0,
+			started_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			completed_at TIMESTAMP NULL,
+			last_error TEXT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+
+		// 历史补齐条目：记录任务扫描出的待补齐路径
+		`CREATE TABLE IF NOT EXISTS replication_reconcile_items (
+			id BIGSERIAL PRIMARY KEY,
+			job_id BIGINT NOT NULL REFERENCES replication_reconcile_jobs(id) ON DELETE CASCADE,
+			path TEXT NOT NULL,
+			is_dir BOOLEAN NOT NULL DEFAULT FALSE,
+			file_size BIGINT NULL,
+			modified_at TIMESTAMP NULL,
+			state TEXT NOT NULL DEFAULT 'pending',
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			UNIQUE(job_id, path)
+		)`,
+
 		// 补充分享表字段（兼容已存在表）
 		`ALTER TABLE share_items ADD COLUMN IF NOT EXISTS view_count BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE share_items ADD COLUMN IF NOT EXISTS download_count BIGINT NOT NULL DEFAULT 0`,
@@ -217,6 +247,10 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 			ON replication_outbox(source_node_id, target_node_id, status, next_retry_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_replication_outbox_pair_created
 			ON replication_outbox(source_node_id, target_node_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_replication_reconcile_jobs_pair
+			ON replication_reconcile_jobs(source_node_id, target_node_id, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_replication_reconcile_items_job_state
+			ON replication_reconcile_items(job_id, state, id)`,
 
 		// 兼容已有地址簿表
 		`ALTER TABLE address_contacts ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}'`,

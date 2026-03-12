@@ -12,6 +12,16 @@ const (
 )
 
 const (
+	ReconcileJobStatusRunning = "running"
+	ReconcileJobStatusReady   = "ready"
+	ReconcileJobStatusFailed  = "failed"
+	ReconcileItemStatePending = "pending"
+	ReconcileItemStateApplied = "applied"
+	ReconcileItemStateSkipped = "skipped"
+	ReconcileItemStateFailed  = "failed"
+)
+
+const (
 	OpEnsureDir  = "ensure_dir"
 	OpUpsertFile = "upsert_file"
 	OpMovePath   = "move_path"
@@ -20,8 +30,9 @@ const (
 )
 
 var (
-	ErrOutboxEventNotFound = errors.New("replication outbox event not found")
-	ErrOffsetNotFound      = errors.New("replication offset not found")
+	ErrOutboxEventNotFound  = errors.New("replication outbox event not found")
+	ErrOffsetNotFound       = errors.New("replication offset not found")
+	ErrReconcileJobNotFound = errors.New("reconcile job not found")
 )
 
 // OutboxEvent is one durable file mutation event waiting to be replicated.
@@ -64,4 +75,33 @@ type Offset struct {
 	LastAppliedOutboxID int64
 	LastAppliedAt       time.Time
 	UpdatedAt           time.Time
+}
+
+// ReconcileJob tracks one historical-reconcile run for a source->target pair.
+type ReconcileJob struct {
+	ID                int64
+	SourceNodeID      string
+	TargetNodeID      string
+	WatermarkOutboxID int64
+	Status            string
+	ScannedItems      int64
+	PendingItems      int64
+	StartedAt         time.Time
+	CompletedAt       *time.Time
+	LastError         *string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+// ReconcileItem is one historical file-system entry waiting for apply.
+type ReconcileItem struct {
+	ID         int64
+	JobID      int64
+	Path       string
+	IsDir      bool
+	FileSize   *int64
+	ModifiedAt *time.Time
+	State      string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }

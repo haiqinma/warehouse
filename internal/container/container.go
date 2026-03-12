@@ -40,12 +40,14 @@ type Container struct {
 	AddressBookRepository repository.AddressBookRepository
 	ReplicationOutboxRepo repository.ReplicationOutboxRepository
 	ReplicationOffsetRepo repository.ReplicationOffsetRepository
+	ReconcileRepo         repository.ReplicationReconcileRepository
 
 	// Services
 	QuotaService       quota.Service
 	AssetSpaceManager  *assetspace.Manager
 	MutationRecorder   service.MutationRecorder
 	ReplicationWorker  *service.ReplicationWorker
+	ReconcileScanner   *service.ReconcileScanner
 	WebDAVService      *service.WebDAVService
 	RecycleService     *service.RecycleService
 	ShareService       *service.ShareService
@@ -181,6 +183,7 @@ func (c *Container) initRepositories() error {
 	// 复制仓储
 	c.ReplicationOutboxRepo = repository.NewPostgresReplicationOutboxRepository(c.DB.DB)
 	c.ReplicationOffsetRepo = repository.NewPostgresReplicationOffsetRepository(c.DB.DB)
+	c.ReconcileRepo = repository.NewPostgresReplicationReconcileRepository(c.DB.DB)
 
 	c.Logger.Info("using PostgreSQL user repository")
 	c.Logger.Info("repositories initialized")
@@ -192,6 +195,11 @@ func (c *Container) initServices() error {
 	c.AssetSpaceManager = assetspace.NewManager(c.Config, c.Logger)
 	c.MutationRecorder = service.NewMutationRecorder(c.Config, c.ReplicationOutboxRepo, c.Logger)
 	c.ReplicationWorker = service.NewReplicationWorker(c.Config, c.ReplicationOutboxRepo, c.Logger)
+	reconcileScanner, err := service.NewReconcileScanner(c.Config.WebDAV.Directory)
+	if err != nil {
+		return fmt.Errorf("failed to create reconcile scanner: %w", err)
+	}
+	c.ReconcileScanner = reconcileScanner
 
 	// 配额服务
 	c.QuotaService = quota.NewService(c.UserRepository)
@@ -295,6 +303,8 @@ func (c *Container) initHandlers() error {
 			c.Logger,
 			c.ReplicationOutboxRepo,
 			c.ReplicationOffsetRepo,
+			c.ReconcileRepo,
+			c.ReconcileScanner,
 		)
 	}
 
