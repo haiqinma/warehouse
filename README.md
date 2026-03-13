@@ -36,6 +36,32 @@ curl http://127.0.0.1:6065/api/v1/public/health/readiness
 build/warehouse -c config.yaml --check-ready
 ```
 
+## HA 命令行
+
+编译后的 `build/warehouse` 除了可以启动服务，也可以作为运维 CLI 使用：
+
+```shell
+# 查看当前实例的复制状态
+build/warehouse ha status -c config.yaml
+
+# 查看 peer（例如 standby）的复制状态
+build/warehouse ha status -c config.yaml --peer
+
+# 手工触发一次历史补齐
+build/warehouse ha reconcile start -c config.yaml
+
+# 查看历史补齐状态
+build/warehouse ha reconcile status -c config.yaml
+
+# 显式写入 bootstrap baseline
+build/warehouse ha bootstrap mark -c config.yaml --peer --outbox-id 123
+```
+
+说明：
+- CLI 会自动根据 `config.yaml` 构造 internal 签名请求，不需要手工写 `curl`、shell 脚本或 HMAC header
+- 默认访问当前实例的 internal 地址；传 `--peer` 时会改为访问 `internal.replication.peer_base_url`
+- 也可以通过 `--base-url` 显式指定目标实例
+
 ## API 文档
 
 - WebDAV 文件 CRUD 与认证流程：`docs/webdav-api.md`

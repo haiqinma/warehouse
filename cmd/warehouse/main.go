@@ -22,8 +22,26 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "ha":
+			if err := runHACommand(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to run HA command: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "serve":
+			runServer(os.Args[2:])
+			return
+		}
+	}
+
+	runServer(os.Args[1:])
+}
+
+func runServer(args []string) {
 	// 解析命令行参数
-	flags := parseFlags()
+	flags := parseFlags(args)
 
 	// 显示版本信息
 	if showVersion, _ := flags.GetBool("version"); showVersion {
@@ -91,7 +109,7 @@ func main() {
 }
 
 // parseFlags 解析命令行参数
-func parseFlags() *pflag.FlagSet {
+func parseFlags(args []string) *pflag.FlagSet {
 	flags := pflag.NewFlagSet("warehouse", pflag.ExitOnError)
 
 	// 基础选项
@@ -119,7 +137,7 @@ func parseFlags() *pflag.FlagSet {
 	flags.String("db-user", "", "Database username")
 	flags.String("db-password", "", "Database password")
 
-	flags.Parse(os.Args[1:])
+	flags.Parse(args)
 
 	if help, _ := flags.GetBool("help"); help {
 		printHelp(flags)
@@ -204,6 +222,8 @@ func printHelp(flags *pflag.FlagSet) {
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  warehouse [flags]")
+	fmt.Println("  warehouse serve [flags]")
+	fmt.Println("  warehouse ha <subcommand> [flags]")
 	fmt.Println()
 	fmt.Println("Flags:")
 	flags.PrintDefaults()
@@ -211,6 +231,9 @@ func printHelp(flags *pflag.FlagSet) {
 	fmt.Println("Examples:")
 	fmt.Println("  # Start with config file")
 	fmt.Println("  warehouse -c config.yaml")
+	fmt.Println()
+	fmt.Println("  # Start with explicit serve subcommand")
+	fmt.Println("  warehouse serve -c config.yaml")
 	fmt.Println()
 	fmt.Println("  # Start with command line flags")
 	fmt.Println("  warehouse -p 8080 -d /data")
@@ -226,6 +249,9 @@ func printHelp(flags *pflag.FlagSet) {
 	fmt.Println()
 	fmt.Println("  # Show version")
 	fmt.Println("  warehouse --version")
+	fmt.Println()
+	fmt.Println("  # Show HA status")
+	fmt.Println("  warehouse ha status -c config.yaml")
 }
 
 func runReadinessCheck(cfg *config.Config) error {

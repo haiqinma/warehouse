@@ -17,6 +17,7 @@
 - `ha-active-standby-deployment.md`：阶段一高可用部署（active / standby）落地指南
 - `internal-replication-design.md`：阶段一 `internal` 复制版 standby 设计
 - `internal-replication-implementation-checklist.md`：阶段一 `internal` 复制实施清单
+- `../容灾方案.md`：当前容灾路线、standby QA、已实现能力与待办
 - `asset-space-design.md`：登录后资产分层设计（个人资产 / 应用资产）
 - `asset-space-implementation-checklist.md`：资产分层落地任务清单（实施步骤与验收）
 
