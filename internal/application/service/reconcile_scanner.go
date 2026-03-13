@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/yeying-community/warehouse/internal/domain/replication"
 )
@@ -52,15 +51,15 @@ func (s *ReconcileScanner) Scan(ctx context.Context) ([]*replication.ReconcileIt
 			IsDir: d.IsDir(),
 			State: replication.ReconcileItemStatePending,
 		}
+		info, err := d.Info()
+		if err != nil {
+			return fmt.Errorf("read file info for %q: %w", path, err)
+		}
+		modifiedAt := info.ModTime().UTC()
+		item.ModifiedAt = &modifiedAt
 		if !d.IsDir() {
-			info, err := d.Info()
-			if err != nil {
-				return fmt.Errorf("read file info for %q: %w", path, err)
-			}
 			size := info.Size()
-			modifiedAt := info.ModTime().UTC().Truncate(time.Second)
 			item.FileSize = &size
-			item.ModifiedAt = &modifiedAt
 		}
 		items = append(items, item)
 		return nil

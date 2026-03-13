@@ -83,6 +83,7 @@ func (r *Router) Setup() http.Handler {
 		mux.Handle("/api/v1/internal/replication/status", r.createInternalHandler(http.HandlerFunc(r.internalReplicationHandler.HandleStatus)))
 		mux.Handle("/api/v1/internal/replication/bootstrap/mark", r.createInternalHandler(http.HandlerFunc(r.internalReplicationHandler.HandleBootstrapMark)))
 		mux.Handle("/api/v1/internal/replication/reconcile/start", r.createInternalHandler(http.HandlerFunc(r.internalReplicationHandler.HandleReconcileStart)))
+		mux.Handle("/api/v1/internal/replication/reconcile/apply-batch", r.createInternalHandler(http.HandlerFunc(r.internalReplicationHandler.HandleReconcileApplyBatch)))
 	}
 
 	// Web3 认证路由（无需认证）

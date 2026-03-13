@@ -75,6 +75,10 @@ func main() {
 		close(backgroundDone)
 	}
 
+	if c.InternalReplicationHandler != nil {
+		go c.InternalReplicationHandler.RunStartupReconcile(backgroundCtx)
+	}
+
 	// 启动服务器
 	serverErrors := make(chan error, 1)
 	go func() {

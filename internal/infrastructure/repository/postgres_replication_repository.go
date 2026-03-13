@@ -33,6 +33,9 @@ type ReplicationReconcileRepository interface {
 	ReplaceItems(ctx context.Context, jobID int64, items []*replication.ReconcileItem) error
 	UpdateJobResult(ctx context.Context, jobID int64, status string, scannedItems, pendingItems int64, completedAt *time.Time, lastError *string) error
 	GetLatestJob(ctx context.Context, sourceNodeID, targetNodeID string) (*replication.ReconcileJob, error)
+	ListPendingItems(ctx context.Context, jobID int64, limit int) ([]*replication.ReconcileItem, error)
+	UpdateItemsState(ctx context.Context, itemIDs []int64, state string) error
+	CountPendingItems(ctx context.Context, jobID int64) (int64, error)
 }
 
 // PostgresReplicationOutboxRepository is the PostgreSQL implementation.
@@ -491,6 +494,97 @@ func (r *PostgresReplicationReconcileRepository) GetLatestJob(ctx context.Contex
 	}
 	job.LastError = nullableString(lastError)
 	return job, nil
+}
+
+// ListPendingItems returns pending reconcile items for one job.
+func (r *PostgresReplicationReconcileRepository) ListPendingItems(ctx context.Context, jobID int64, limit int) ([]*replication.ReconcileItem, error) {
+	if limit <= 0 {
+		limit = defaultReplicationPendingLimit
+	}
+	query := `
+		SELECT id, job_id, path, is_dir, file_size, modified_at, state, created_at, updated_at
+		FROM replication_reconcile_items
+		WHERE job_id = $1
+		  AND state = $2
+		ORDER BY id ASC
+		LIMIT $3
+	`
+	rows, err := r.db.QueryContext(ctx, query, jobID, replication.ReconcileItemStatePending, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pending reconcile items: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]*replication.ReconcileItem, 0, limit)
+	for rows.Next() {
+		item := &replication.ReconcileItem{}
+		var fileSize sql.NullInt64
+		var modifiedAt sql.NullTime
+		if err := rows.Scan(
+			&item.ID,
+			&item.JobID,
+			&item.Path,
+			&item.IsDir,
+			&fileSize,
+			&modifiedAt,
+			&item.State,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan reconcile item: %w", err)
+		}
+		item.FileSize = nullableInt64(fileSize)
+		if modifiedAt.Valid {
+			item.ModifiedAt = &modifiedAt.Time
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate reconcile items: %w", err)
+	}
+	return items, nil
+}
+
+// UpdateItemsState updates reconcile items state by item IDs.
+func (r *PostgresReplicationReconcileRepository) UpdateItemsState(ctx context.Context, itemIDs []int64, state string) error {
+	if len(itemIDs) == 0 {
+		return nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin reconcile item state transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	query := `
+		UPDATE replication_reconcile_items
+		SET state = $2, updated_at = NOW()
+		WHERE id = $1
+	`
+	for _, itemID := range itemIDs {
+		if _, err := tx.ExecContext(ctx, query, itemID, state); err != nil {
+			return fmt.Errorf("failed to update reconcile item %d state: %w", itemID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit reconcile item state updates: %w", err)
+	}
+	return nil
+}
+
+// CountPendingItems returns pending item count for one job.
+func (r *PostgresReplicationReconcileRepository) CountPendingItems(ctx context.Context, jobID int64) (int64, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM replication_reconcile_items
+		WHERE job_id = $1
+		  AND state = $2
+	`
+	var pending int64
+	if err := r.db.QueryRowContext(ctx, query, jobID, replication.ReconcileItemStatePending).Scan(&pending); err != nil {
+		return 0, fmt.Errorf("failed to count pending reconcile items: %w", err)
+	}
+	return pending, nil
 }
 
 func scanOutboxEvent(scanner interface {

@@ -98,6 +98,51 @@ func (s *fakeReconcileStore) GetLatestJob(_ context.Context, sourceNodeID, targe
 	return s.latestJob, nil
 }
 
+func (s *fakeReconcileStore) ListPendingItems(_ context.Context, _ int64, limit int) ([]*replication.ReconcileItem, error) {
+	if len(s.items) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 || limit > len(s.items) {
+		limit = len(s.items)
+	}
+	pending := make([]*replication.ReconcileItem, 0, limit)
+	for _, item := range s.items {
+		if item.State == "" || item.State == replication.ReconcileItemStatePending {
+			pending = append(pending, item)
+		}
+		if len(pending) >= limit {
+			break
+		}
+	}
+	return pending, nil
+}
+
+func (s *fakeReconcileStore) UpdateItemsState(_ context.Context, itemIDs []int64, state string) error {
+	if len(itemIDs) == 0 {
+		return nil
+	}
+	idSet := make(map[int64]struct{}, len(itemIDs))
+	for _, id := range itemIDs {
+		idSet[id] = struct{}{}
+	}
+	for _, item := range s.items {
+		if _, ok := idSet[item.ID]; ok {
+			item.State = state
+		}
+	}
+	return nil
+}
+
+func (s *fakeReconcileStore) CountPendingItems(_ context.Context, _ int64) (int64, error) {
+	var count int64
+	for _, item := range s.items {
+		if item.State == "" || item.State == replication.ReconcileItemStatePending {
+			count++
+		}
+	}
+	return count, nil
+}
+
 type fakeReconcileScanner struct {
 	items []*replication.ReconcileItem
 	err   error

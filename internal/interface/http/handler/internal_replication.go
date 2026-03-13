@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -28,6 +29,9 @@ type replicationReconcileStore interface {
 	ReplaceItems(ctx context.Context, jobID int64, items []*replication.ReconcileItem) error
 	UpdateJobResult(ctx context.Context, jobID int64, status string, scannedItems, pendingItems int64, completedAt *time.Time, lastError *string) error
 	GetLatestJob(ctx context.Context, sourceNodeID, targetNodeID string) (*replication.ReconcileJob, error)
+	ListPendingItems(ctx context.Context, jobID int64, limit int) ([]*replication.ReconcileItem, error)
+	UpdateItemsState(ctx context.Context, itemIDs []int64, state string) error
+	CountPendingItems(ctx context.Context, jobID int64) (int64, error)
 }
 
 type replicationReconcileScanner interface {
@@ -250,21 +254,80 @@ func (h *InternalReplicationHandler) HandleReconcileStart(w http.ResponseWriter,
 	if targetNodeID == "" {
 		targetNodeID = strings.TrimSpace(h.config.Internal.Replication.PeerNodeID)
 	}
-	if targetNodeID == "" {
-		h.writeError(w, http.StatusBadRequest, "targetNodeId is required")
+	resp, err := h.startReconcile(r.Context(), targetNodeID)
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	h.writeJSON(w, http.StatusOK, resp)
+}
+
+// RunStartupReconcile tries to trigger one full historical reconcile after startup.
+func (h *InternalReplicationHandler) RunStartupReconcile(ctx context.Context) {
+	if !strings.EqualFold(strings.TrimSpace(h.config.Node.Role), "active") {
+		return
+	}
+	targetNodeID := strings.TrimSpace(h.config.Internal.Replication.PeerNodeID)
+	if targetNodeID == "" || strings.TrimSpace(h.config.Internal.Replication.PeerBaseURL) == "" {
+		return
+	}
+	if h.reconcileStore == nil || h.reconcileScanner == nil {
+		return
+	}
+
+	const maxAttempts = 24
+	const retryInterval = 5 * time.Second
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		resp, err := h.startReconcile(ctx, targetNodeID)
+		if err == nil {
+			h.logger.Info("startup reconcile finished",
+				zap.Int64("job_id", resp.JobID),
+				zap.String("target_node_id", resp.TargetNodeID),
+				zap.Int64("scanned_items", resp.ScannedItems),
+				zap.Int64("pending_items", resp.PendingItems))
+			return
+		}
+
+		h.logger.Warn("startup reconcile attempt failed, will retry",
+			zap.Int("attempt", attempt),
+			zap.Int("max_attempts", maxAttempts),
+			zap.String("target_node_id", targetNodeID),
+			zap.Error(err))
+
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+
+	h.logger.Warn("startup reconcile stopped after max retry attempts",
+		zap.Int("max_attempts", maxAttempts),
+		zap.String("target_node_id", targetNodeID))
+}
+
+func (h *InternalReplicationHandler) startReconcile(ctx context.Context, targetNodeID string) (*internalReconcileStartResponse, error) {
+	targetNodeID = strings.TrimSpace(targetNodeID)
+	if targetNodeID == "" {
+		targetNodeID = strings.TrimSpace(h.config.Internal.Replication.PeerNodeID)
+	}
+	if targetNodeID == "" {
+		return nil, fmt.Errorf("targetNodeId is required")
 	}
 
 	watermarkOutboxID := int64(0)
 	if h.outbox != nil {
-		summary, err := h.outbox.GetStatusSummary(r.Context(), h.config.Node.ID, targetNodeID)
+		summary, err := h.outbox.GetStatusSummary(ctx, h.config.Node.ID, targetNodeID)
 		if err != nil {
-			h.logger.Error("failed to load outbox status before reconcile",
-				zap.String("source_node_id", h.config.Node.ID),
-				zap.String("target_node_id", targetNodeID),
-				zap.Error(err))
-			h.writeError(w, http.StatusInternalServerError, "Failed to load outbox status")
-			return
+			return nil, fmt.Errorf("load outbox status: %w", err)
 		}
 		if summary != nil && summary.LastOutboxID != nil {
 			watermarkOutboxID = *summary.LastOutboxID
@@ -278,41 +341,46 @@ func (h *InternalReplicationHandler) HandleReconcileStart(w http.ResponseWriter,
 		Status:            replication.ReconcileJobStatusRunning,
 		StartedAt:         time.Now(),
 	}
-	if err := h.reconcileStore.CreateJob(r.Context(), job); err != nil {
-		h.logger.Error("failed to create reconcile job",
-			zap.String("source_node_id", job.SourceNodeID),
-			zap.String("target_node_id", job.TargetNodeID),
-			zap.Error(err))
-		h.writeError(w, http.StatusInternalServerError, "Failed to create reconcile job")
-		return
+	if err := h.reconcileStore.CreateJob(ctx, job); err != nil {
+		return nil, fmt.Errorf("create reconcile job: %w", err)
 	}
 
-	items, err := h.reconcileScanner.Scan(r.Context())
+	items, err := h.reconcileScanner.Scan(ctx)
 	if err != nil {
 		lastErr := err.Error()
-		_ = h.reconcileStore.UpdateJobResult(r.Context(), job.ID, replication.ReconcileJobStatusFailed, 0, 0, nil, &lastErr)
-		h.logger.Error("failed to scan local data for reconcile",
-			zap.Int64("job_id", job.ID),
-			zap.Error(err))
-		h.writeError(w, http.StatusInternalServerError, "Failed to scan local data")
-		return
+		_ = h.reconcileStore.UpdateJobResult(ctx, job.ID, replication.ReconcileJobStatusFailed, 0, 0, nil, &lastErr)
+		return nil, fmt.Errorf("scan local data for reconcile: %w", err)
 	}
 
-	if err := h.reconcileStore.ReplaceItems(r.Context(), job.ID, items); err != nil {
+	if err := h.reconcileStore.ReplaceItems(ctx, job.ID, items); err != nil {
 		lastErr := err.Error()
-		_ = h.reconcileStore.UpdateJobResult(r.Context(), job.ID, replication.ReconcileJobStatusFailed, int64(len(items)), int64(len(items)), nil, &lastErr)
-		h.logger.Error("failed to persist reconcile items",
-			zap.Int64("job_id", job.ID),
-			zap.Error(err))
-		h.writeError(w, http.StatusInternalServerError, "Failed to persist reconcile items")
-		return
+		_ = h.reconcileStore.UpdateJobResult(ctx, job.ID, replication.ReconcileJobStatusFailed, int64(len(items)), int64(len(items)), nil, &lastErr)
+		return nil, fmt.Errorf("persist reconcile items: %w", err)
 	}
 
 	scannedItems := int64(len(items))
 	pendingItems := scannedItems
+	if pendingItems > 0 && strings.TrimSpace(h.config.Internal.Replication.PeerBaseURL) != "" {
+		remaining, dispatchErr := h.dispatchReconcilePendingItems(ctx, job.ID, targetNodeID)
+		if dispatchErr != nil {
+			lastErr := dispatchErr.Error()
+			_ = h.reconcileStore.UpdateJobResult(
+				ctx,
+				job.ID,
+				replication.ReconcileJobStatusFailed,
+				scannedItems,
+				remaining,
+				nil,
+				&lastErr,
+			)
+			return nil, fmt.Errorf("dispatch reconcile items: %w", dispatchErr)
+		}
+		pendingItems = remaining
+	}
+
 	completedAt := time.Now()
 	if err := h.reconcileStore.UpdateJobResult(
-		r.Context(),
+		ctx,
 		job.ID,
 		replication.ReconcileJobStatusReady,
 		scannedItems,
@@ -320,14 +388,10 @@ func (h *InternalReplicationHandler) HandleReconcileStart(w http.ResponseWriter,
 		&completedAt,
 		nil,
 	); err != nil {
-		h.logger.Error("failed to finalize reconcile job",
-			zap.Int64("job_id", job.ID),
-			zap.Error(err))
-		h.writeError(w, http.StatusInternalServerError, "Failed to finalize reconcile job")
-		return
+		return nil, fmt.Errorf("finalize reconcile job: %w", err)
 	}
 
-	h.writeJSON(w, http.StatusOK, internalReconcileStartResponse{
+	return &internalReconcileStartResponse{
 		Success:           true,
 		JobID:             job.ID,
 		SourceNodeID:      job.SourceNodeID,
@@ -336,7 +400,7 @@ func (h *InternalReplicationHandler) HandleReconcileStart(w http.ResponseWriter,
 		ScannedItems:      scannedItems,
 		PendingItems:      pendingItems,
 		Status:            replication.ReconcileJobStatusReady,
-	})
+	}, nil
 }
 
 func (h *InternalReplicationHandler) replicationPair() (string, string) {
