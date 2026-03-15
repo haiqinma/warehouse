@@ -224,6 +224,8 @@ export interface ShareEntryItem {
   modified: string
 }
 
+export type ShareExpiryUnit = 'minute' | 'hour' | 'day' | 'week' | 'month' | 'year'
+
 export interface AddressGroup {
   id: string
   name: string
@@ -241,7 +243,11 @@ export interface AddressContact {
 
 // 分享 API
 export const shareApi = {
-  create(path: string, expiresIn?: number) {
+  create(path: string, expiry?: {
+    expiresIn?: number
+    expiresValue?: number
+    expiresUnit?: ShareExpiryUnit
+  }) {
     return request<{
       token: string
       name: string
@@ -252,7 +258,7 @@ export const shareApi = {
       expiresAt?: string
     }>('/api/v1/public/share/create', {
       method: 'POST',
-      body: { path, expiresIn }
+      body: { path, ...expiry }
     })
   },
 
@@ -277,6 +283,8 @@ export const directShareApi = {
     targetAddress: string
     permissions: string[]
     expiresIn?: number
+    expiresValue?: number
+    expiresUnit?: ShareExpiryUnit
   }) {
     return request<DirectShareItem>('/api/v1/public/share/user/create', {
       method: 'POST',

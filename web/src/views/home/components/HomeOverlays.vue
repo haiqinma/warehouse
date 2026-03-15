@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import type { AddressContact, AddressGroup, DirectShareItem, RecycleItem, ShareItem } from '@/api'
+import type { AddressContact, AddressGroup, DirectShareItem, RecycleItem, ShareExpiryUnit, ShareItem } from '@/api'
 import type { FileItem } from '../types'
 import { shortenAddress } from '@/utils/address'
 
@@ -32,6 +32,18 @@ const props = defineProps<{
   enterSharedDirectory: (item: FileItem) => void
   downloadSharedRoot: (item: DirectShareItem) => void
   downloadSharedFile: (item: FileItem) => void
+  shareLinkDialogVisible: boolean
+  shareLinkSubmitting: boolean
+  shareLinkTarget: FileItem | null
+  shareLinkForm: {
+    expiresValue: string
+    expiresUnit: ShareExpiryUnit
+  }
+  shareExpiryUnits: Array<{
+    label: string
+    value: ShareExpiryUnit
+  }>
+  submitShareLink: () => void
   shareUserDialogVisible: boolean
   shareUserSubmitting: boolean
   shareUserTarget: FileItem | null
@@ -40,7 +52,8 @@ const props = defineProps<{
     targetAddress: string
     groupId: string
     permissions: string[]
-    expiresIn: string
+    expiresValue: string
+    expiresUnit: ShareExpiryUnit
   }
   addressContacts: AddressContact[]
   addressGroups: AddressGroup[]
@@ -74,6 +87,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'update:detailDrawerVisible', value: boolean): void
+  (event: 'update:shareLinkDialogVisible', value: boolean): void
   (event: 'update:shareUserDialogVisible', value: boolean): void
   (event: 'update:createFolderDialogVisible', value: boolean): void
   (event: 'update:renameDialogVisible', value: boolean): void
@@ -83,6 +97,11 @@ const emit = defineEmits<{
 const detailDrawerModel = computed({
   get: () => props.detailDrawerVisible,
   set: value => emit('update:detailDrawerVisible', value)
+})
+
+const shareLinkDialogModel = computed({
+  get: () => props.shareLinkDialogVisible,
+  set: value => emit('update:shareLinkDialogVisible', value)
 })
 
 const shareUserDialogModel = computed({
@@ -514,6 +533,36 @@ onBeforeUnmount(() => {
   </el-drawer>
 
   <el-dialog
+    v-model="shareLinkDialogModel"
+    title="创建分享链接"
+    width="420px"
+  >
+    <el-form label-width="72px" label-position="left" class="share-user-form">
+      <el-form-item label="分享对象">
+        <span class="share-user-value">{{ shareLinkTarget?.name || '-' }}</span>
+      </el-form-item>
+      <el-form-item label="有效期">
+        <div class="share-expiry-field">
+          <el-input v-model="shareLinkForm.expiresValue" placeholder="0" />
+          <el-select v-model="shareLinkForm.expiresUnit" class="share-expiry-unit">
+            <el-option
+              v-for="item in shareExpiryUnits"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
+        </div>
+        <div class="share-group-meta">输入 0 表示永不过期</div>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="shareLinkDialogModel = false">取消</el-button>
+      <el-button type="primary" :loading="shareLinkSubmitting" @click="submitShareLink">创建并复制</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog
     v-model="shareUserDialogModel"
     title="共享给用户"
     width="420px"
@@ -574,7 +623,18 @@ onBeforeUnmount(() => {
         </el-checkbox-group>
       </el-form-item>
       <el-form-item label="有效期">
-        <el-input v-model="shareUserForm.expiresIn" placeholder="小时（0 表示永不过期）" />
+        <div class="share-expiry-field">
+          <el-input v-model="shareUserForm.expiresValue" placeholder="0" />
+          <el-select v-model="shareUserForm.expiresUnit" class="share-expiry-unit">
+            <el-option
+              v-for="item in shareExpiryUnits"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
+        </div>
+        <div class="share-group-meta">输入 0 表示永不过期</div>
       </el-form-item>
     </el-form>
     <template #footer>
@@ -667,6 +727,22 @@ onBeforeUnmount(() => {
 
 .share-user-permissions :deep(.el-checkbox) {
   margin-right: 6px;
+}
+
+.share-expiry-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.share-expiry-field :deep(.el-input) {
+  flex: 1;
+}
+
+.share-expiry-unit {
+  width: 112px;
+  flex: 0 0 112px;
 }
 
 .rename-field {

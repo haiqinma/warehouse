@@ -3,7 +3,7 @@ import { ref, onMounted, onBeforeUnmount, computed, watch, defineAsyncComponent,
 import { storeToRefs } from 'pinia'
 import { ArrowLeft, ArrowUp, Delete, Expand, Fold, FolderAdd, FolderOpened, Grid, Refresh, Upload, DocumentCopy, Share, Search, MoreFilled, Notebook, User } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
-import { quotaApi, userApi, recycleApi, shareApi, directShareApi, assetsApi, type RecycleItem, type ShareItem, type DirectShareItem, type AssetSpaceInfo } from '@/api'
+import { quotaApi, userApi, recycleApi, shareApi, directShareApi, assetsApi, type RecycleItem, type ShareItem, type DirectShareItem, type AssetSpaceInfo, type ShareExpiryUnit } from '@/api'
 import { isLoggedIn, hasWallet, getUsername, getWalletName, getCurrentAccount, getUserPermissions, getUserCreatedAt, loginWithWallet, loginWithPassword, sendEmailCode, loginWithEmailCode, getAccountHistory, watchWalletAccounts, consumeAccountChanged } from '@/plugins/auth'
 import { parsePropfindResponse } from '@/utils/webdav'
 import { copyText } from '@/utils/clipboard'
@@ -87,6 +87,10 @@ const detailMode = ref<'file' | 'recycle' | 'share' | 'directShare' | 'receivedS
 const detailItem = ref<FileItem | RecycleItem | ShareItem | DirectShareItem | null>(null)
 const dragActive = ref(false)
 const dragCounter = ref(0)
+const shareLinkDialogVisible = ref(false)
+const shareLinkSubmitting = ref(false)
+const shareLinkTarget = ref<FileItem | null>(null)
+const shareLinkForm = ref(createDefaultShareExpiryForm())
 const shareUserDialogVisible = ref(false)
 const shareUserSubmitting = ref(false)
 const shareUserTarget = ref<FileItem | null>(null)
@@ -95,7 +99,7 @@ const shareUserForm = ref({
   targetAddress: '',
   groupId: '',
   permissions: ['read'] as string[],
-  expiresIn: '0'
+  ...createDefaultShareExpiryForm()
 })
 const addressBookStore = useAddressBookStore()
 const { addressBookLoading, addressGroups, addressContacts } = storeToRefs(addressBookStore)
@@ -145,8 +149,20 @@ const SHARED_PATH_STORAGE_KEY = 'warehouse:sharedPath'
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'warehouse:sidebarCollapsed'
 type ViewKey = 'files' | 'recycle' | 'shareLink' | 'shareDirect' | 'sharedWithMe' | 'quotaManage' | 'addressBook' | 'uploadTasks'
 type AssetSpace = AssetSpaceInfo
+type ShareExpiryForm = {
+  expiresValue: string
+  expiresUnit: ShareExpiryUnit
+}
 type DirectShareRelation = 'owned' | 'received'
 type DirectShareListItem = DirectShareItem & { relation?: DirectShareRelation }
+const SHARE_EXPIRY_UNITS: Array<{ label: string; value: ShareExpiryUnit }> = [
+  { label: '分钟', value: 'minute' },
+  { label: '小时', value: 'hour' },
+  { label: '天', value: 'day' },
+  { label: '周', value: 'week' },
+  { label: '月', value: 'month' },
+  { label: '年', value: 'year' }
+]
 const ASSET_SPACE_NAME_BY_KEY: Record<string, string> = {
   personal: '个人资产',
   apps: '应用资产'
@@ -755,6 +771,32 @@ function showError(message: string, title = '错误'): void {
     type: 'error',
     closeOnClickModal: false
   })
+}
+
+function createDefaultShareExpiryForm(): ShareExpiryForm {
+  return {
+    expiresValue: '0',
+    expiresUnit: 'hour'
+  }
+}
+
+function parseShareExpiryValue(raw: string): number | null {
+  const trimmed = raw.trim()
+  if (!/^\d+$/.test(trimmed)) return null
+  const value = Number.parseInt(trimmed, 10)
+  return Number.isSafeInteger(value) ? value : null
+}
+
+function resolveShareExpiryPayload(form: ShareExpiryForm): { expiresValue: number; expiresUnit: ShareExpiryUnit } | null {
+  const expiresValue = parseShareExpiryValue(form.expiresValue)
+  if (expiresValue === null) {
+    showError('有效期请输入非负整数')
+    return null
+  }
+  return {
+    expiresValue,
+    expiresUnit: form.expiresUnit
+  }
 }
 
 async function handleWalletLogin() {
@@ -1667,34 +1709,27 @@ async function submitRename() {
 
 async function shareFile(item: FileItem) {
   if (item.isDir) return
-  try {
-    let expiresIn: number | undefined
-    try {
-      const { value } = await ElMessageBox.prompt(
-        '设置有效期（小时，0 表示永不过期）',
-        '创建分享链接',
-        {
-          confirmButtonText: '创建',
-          cancelButtonText: '取消',
-          inputPattern: /^\d+$/,
-          inputErrorMessage: '请输入非负整数',
-          inputValue: '0'
-        }
-      )
-      const hours = parseInt(value, 10)
-      if (Number.isFinite(hours) && hours > 0) {
-        expiresIn = hours * 3600
-      }
-    } catch {
-      return
-    }
+  shareLinkTarget.value = item
+  shareLinkForm.value = createDefaultShareExpiryForm()
+  shareLinkDialogVisible.value = true
+}
 
-    const data = await shareApi.create(item.path, expiresIn)
+async function submitShareLink() {
+  if (!shareLinkTarget.value) return
+  const expiryPayload = resolveShareExpiryPayload(shareLinkForm.value)
+  if (!expiryPayload) return
+
+  shareLinkSubmitting.value = true
+  try {
+    const data = await shareApi.create(shareLinkTarget.value.path, expiryPayload)
     const url = data.url || `${window.location.origin}/api/v1/public/share/${data.token}`
     await copyText(url, '分享链接已复制')
-  } catch (error) {
+    shareLinkDialogVisible.value = false
+  } catch (error: any) {
     console.error('创建分享失败:', error)
-    showError('创建分享失败')
+    showError(error?.message || '创建分享失败')
+  } finally {
+    shareLinkSubmitting.value = false
   }
 }
 
@@ -2507,7 +2542,7 @@ function openShareUserDialog(item: FileItem) {
     targetAddress: '',
     groupId: '',
     permissions: ['read'],
-    expiresIn: '0'
+    ...createDefaultShareExpiryForm()
   }
   shareUserDialogVisible.value = true
   addressBookStore.fetchAddressBook()
@@ -2520,8 +2555,8 @@ async function submitShareUser() {
     return
   }
 
-  const hours = parseInt(shareUserForm.value.expiresIn, 10)
-  const expiresIn = Number.isFinite(hours) && hours > 0 ? hours * 3600 : 0
+  const expiryPayload = resolveShareExpiryPayload(shareUserForm.value)
+  if (!expiryPayload) return
   const rawPath = shareUserTarget.value.isDir
     ? shareUserTarget.value.path.replace(/\/$/, '')
     : shareUserTarget.value.path
@@ -2539,7 +2574,7 @@ async function submitShareUser() {
         path: rawPath,
         targetAddress: address,
         permissions: shareUserForm.value.permissions,
-        expiresIn
+        ...expiryPayload
       }))
       const results = await Promise.allSettled(tasks)
       const successCount = results.filter(result => result.status === 'fulfilled').length
@@ -2560,7 +2595,7 @@ async function submitShareUser() {
         path: rawPath,
         targetAddress,
         permissions: shareUserForm.value.permissions,
-        expiresIn
+        ...expiryPayload
       })
       showSuccess('已分享给指定用户')
     }
@@ -3788,6 +3823,12 @@ onBeforeUnmount(() => {
         :enter-shared-directory="enterSharedDirectory"
         :download-shared-root="downloadSharedRoot"
         :download-shared-file="downloadSharedFile"
+        v-model:share-link-dialog-visible="shareLinkDialogVisible"
+        :share-link-submitting="shareLinkSubmitting"
+        :share-link-target="shareLinkTarget"
+        :share-link-form="shareLinkForm"
+        :share-expiry-units="SHARE_EXPIRY_UNITS"
+        :submit-share-link="submitShareLink"
         v-model:share-user-dialog-visible="shareUserDialogVisible"
         :share-user-submitting="shareUserSubmitting"
         :share-user-target="shareUserTarget"

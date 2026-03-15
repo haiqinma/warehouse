@@ -44,7 +44,7 @@ func NewShareUserService(
 }
 
 // Create 创建定向分享
-func (s *ShareUserService) Create(ctx context.Context, owner *user.User, targetWallet string, rawPath string, permissions string, expiresIn int64) (*shareuser.ShareUserItem, error) {
+func (s *ShareUserService) Create(ctx context.Context, owner *user.User, targetWallet string, rawPath string, permissions string, expiry ShareExpiryInput) (*shareuser.ShareUserItem, error) {
 	cleanPath, err := normalizeSharePath(rawPath, s.webdavPrefix())
 	if err != nil {
 		return nil, err
@@ -67,10 +67,9 @@ func (s *ShareUserService) Create(ctx context.Context, owner *user.User, targetW
 	name := filepath.Base(cleanPath)
 	isDir := info.IsDir()
 
-	var expiresAt *time.Time
-	if expiresIn > 0 {
-		t := time.Now().Add(time.Duration(expiresIn) * time.Second)
-		expiresAt = &t
+	expiresAt, err := expiry.Resolve(time.Now())
+	if err != nil {
+		return nil, err
 	}
 
 	item := shareuser.NewShareUserItem(
