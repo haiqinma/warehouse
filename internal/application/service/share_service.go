@@ -41,7 +41,7 @@ func NewShareService(
 }
 
 // Create 创建分享链接
-func (s *ShareService) Create(ctx context.Context, u *user.User, rawPath string, expiresIn int64) (*share.ShareItem, error) {
+func (s *ShareService) Create(ctx context.Context, u *user.User, rawPath string, expiry ShareExpiryInput) (*share.ShareItem, error) {
 	cleanPath, err := normalizeSharePath(rawPath, s.webdavPrefix())
 	if err != nil {
 		return nil, err
@@ -60,10 +60,9 @@ func (s *ShareService) Create(ctx context.Context, u *user.User, rawPath string,
 	}
 
 	name := filepath.Base(fullPath)
-	var expiresAt *time.Time
-	if expiresIn > 0 {
-		t := time.Now().Add(time.Duration(expiresIn) * time.Second)
-		expiresAt = &t
+	expiresAt, err := expiry.Resolve(time.Now())
+	if err != nil {
+		return nil, err
 	}
 
 	item := share.NewShareItem(u.ID, u.Username, cleanPath, name, expiresAt)

@@ -44,8 +44,10 @@ func (h *ShareHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Path      string `json:"path"`
-		ExpiresIn int64  `json:"expiresIn"`
+		Path         string `json:"path"`
+		ExpiresIn    int64  `json:"expiresIn"`
+		ExpiresValue int64  `json:"expiresValue"`
+		ExpiresUnit  string `json:"expiresUnit"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.logger.Warn("invalid request body", zap.Error(err))
@@ -57,7 +59,11 @@ func (h *ShareHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	item, err := h.shareService.Create(r.Context(), u, req.Path, req.ExpiresIn)
+	item, err := h.shareService.Create(r.Context(), u, req.Path, service.ShareExpiryInput{
+		ExpiresIn:    req.ExpiresIn,
+		ExpiresValue: req.ExpiresValue,
+		ExpiresUnit:  req.ExpiresUnit,
+	})
 	if err != nil {
 		if errors.Is(err, auth.ErrAppScopeDenied) || errors.Is(err, auth.ErrAppScopeRequired) {
 			http.Error(w, "Forbidden", http.StatusForbidden)

@@ -718,8 +718,17 @@ curl -X POST -u alice:password123 \
 Body：
 
 ```json
-{ "path": "/docs/file.txt", "expiresIn": 3600 }
+{
+  "path": "/docs/file.txt",
+  "expiresValue": 1,
+  "expiresUnit": "day"
+}
 ```
+
+说明：
+- `expiresValue=0` 表示永不过期。
+- `expiresUnit` 支持 `minute`、`hour`、`day`、`week`、`month`、`year`。
+- 兼容旧字段 `expiresIn`，单位仍为秒。
 
 成功响应：
 
@@ -791,12 +800,16 @@ Body：
   "path": "/docs",
   "targetAddress": "0x...",
   "permissions": ["read", "create", "update", "delete"],
-  "expiresIn": 86400
+  "expiresValue": 2,
+  "expiresUnit": "week"
 }
 ```
 
 说明：
 - `permissions` 也可传单个 `"CRUD"` 字符串。
+- `expiresValue=0` 表示永不过期。
+- `expiresUnit` 支持 `minute`、`hour`、`day`、`week`、`month`、`year`。
+- 兼容旧字段 `expiresIn`，单位仍为秒。
 
 ### 11.2 列表/撤销
 
