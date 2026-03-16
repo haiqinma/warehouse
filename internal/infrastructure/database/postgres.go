@@ -113,21 +113,6 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 			created_at TIMESTAMP NOT NULL DEFAULT NOW()
 		)`,
 
-		// 创建定向分享表（分享给指定用户）
-		`CREATE TABLE IF NOT EXISTS share_user_items (
-			id VARCHAR(50) PRIMARY KEY,
-			owner_user_id VARCHAR(50) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			owner_username VARCHAR(255) NOT NULL,
-			target_user_id VARCHAR(50) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			target_wallet_address VARCHAR(255) NOT NULL,
-			name TEXT NOT NULL,
-			path TEXT NOT NULL,
-			is_dir BOOLEAN NOT NULL DEFAULT FALSE,
-			permissions VARCHAR(10) NOT NULL,
-			expires_at TIMESTAMP NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW()
-		)`,
-
 		// 内部共享主表：支持单用户/分组/全员共享的统一共享对象
 		`CREATE TABLE IF NOT EXISTS internal_share_items (
 			id VARCHAR(50) PRIMARY KEY,
@@ -274,11 +259,6 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 		`ALTER TABLE share_items ADD COLUMN IF NOT EXISTS download_count BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE internal_share_items ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'`,
 
-		// 补充定向分享表字段（兼容已存在表）
-		`ALTER TABLE share_user_items ADD COLUMN IF NOT EXISTS is_dir BOOLEAN NOT NULL DEFAULT FALSE`,
-		`ALTER TABLE share_user_items ADD COLUMN IF NOT EXISTS permissions VARCHAR(10) NOT NULL DEFAULT 'R'`,
-		`ALTER TABLE share_user_items ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP NULL`,
-
 		// 创建回收站的哈希索引
 		`CREATE INDEX IF NOT EXISTS idx_recycle_items_hash ON recycle_items(hash)`,
 
@@ -291,10 +271,6 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 		// 创建分享的用户ID索引
 		`CREATE INDEX IF NOT EXISTS idx_share_items_user_id ON share_items(user_id)`,
 
-		// 创建定向分享的用户索引
-		`CREATE INDEX IF NOT EXISTS idx_share_user_items_owner_id ON share_user_items(owner_user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_share_user_items_target_id ON share_user_items(target_user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_share_user_items_target_wallet ON share_user_items(target_wallet_address)`,
 		`CREATE INDEX IF NOT EXISTS idx_internal_share_items_owner_created
 			ON internal_share_items(owner_user_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_internal_share_items_path ON internal_share_items(path)`,
@@ -378,37 +354,51 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 		FOR EACH ROW
 		EXECUTE FUNCTION update_updated_at_column()`,
 
-		// 兼容迁移：将旧 share_user_items 自动回填到统一内部共享模型
-		`INSERT INTO internal_share_items (
-			id, owner_user_id, owner_username, name, path, is_dir, permissions, expires_at, status, created_at, updated_at
-		)
-		SELECT
-			s.id,
-			s.owner_user_id,
-			s.owner_username,
-			s.name,
-			s.path,
-			s.is_dir,
-			s.permissions,
-			s.expires_at,
-			'active',
-			s.created_at,
-			s.created_at
-		FROM share_user_items s
-		ON CONFLICT (id) DO NOTHING`,
-		`INSERT INTO internal_share_audiences (
-			id, share_id, audience_type, target_user_id, target_wallet_address, source_group_id, created_at
-		)
-		SELECT
-			'aud_' || md5(s.id || '|user|' || s.target_user_id || '|' || s.target_wallet_address || '|'),
-			s.id,
-			'user',
-			s.target_user_id,
-			s.target_wallet_address,
-			NULL,
-			s.created_at
-		FROM share_user_items s
-		ON CONFLICT (id) DO NOTHING`,
+		// 历史升级：若旧 share_user_items 存在，则一次性导入到 internal_share_*。
+		`DO $$
+		BEGIN
+			IF to_regclass('public.share_user_items') IS NOT NULL THEN
+				ALTER TABLE share_user_items ADD COLUMN IF NOT EXISTS is_dir BOOLEAN NOT NULL DEFAULT FALSE;
+				ALTER TABLE share_user_items ADD COLUMN IF NOT EXISTS permissions VARCHAR(10) NOT NULL DEFAULT 'R';
+				ALTER TABLE share_user_items ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP NULL;
+
+				CREATE INDEX IF NOT EXISTS idx_share_user_items_owner_id ON share_user_items(owner_user_id);
+				CREATE INDEX IF NOT EXISTS idx_share_user_items_target_id ON share_user_items(target_user_id);
+				CREATE INDEX IF NOT EXISTS idx_share_user_items_target_wallet ON share_user_items(target_wallet_address);
+
+				INSERT INTO internal_share_items (
+					id, owner_user_id, owner_username, name, path, is_dir, permissions, expires_at, status, created_at, updated_at
+				)
+				SELECT
+					s.id,
+					s.owner_user_id,
+					s.owner_username,
+					s.name,
+					s.path,
+					s.is_dir,
+					s.permissions,
+					s.expires_at,
+					'active',
+					s.created_at,
+					s.created_at
+				FROM share_user_items s
+				ON CONFLICT (id) DO NOTHING;
+
+				INSERT INTO internal_share_audiences (
+					id, share_id, audience_type, target_user_id, target_wallet_address, source_group_id, created_at
+				)
+				SELECT
+					'aud_' || md5(s.id || '|user|' || s.target_user_id || '|' || s.target_wallet_address || '|'),
+					s.id,
+					'user',
+					s.target_user_id,
+					s.target_wallet_address,
+					NULL,
+					s.created_at
+				FROM share_user_items s
+				ON CONFLICT (id) DO NOTHING;
+			END IF;
+		END $$`,
 	}
 
 	tx, err := p.DB.BeginTx(ctx, nil)

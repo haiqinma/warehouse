@@ -728,7 +728,6 @@ Body：
 说明：
 - `expiresValue=0` 表示永不过期。
 - `expiresUnit` 支持 `minute`、`hour`、`day`、`week`、`month`、`year`。
-- 兼容旧字段 `expiresIn`，单位仍为秒。
 
 成功响应：
 
@@ -831,12 +830,11 @@ Body：
 - `permissions` 也可传单个 `"CRUD"` 字符串。
 - `expiresValue=0` 表示永不过期。
 - `expiresUnit` 支持 `minute`、`hour`、`day`、`week`、`month`、`year`。
-- 兼容旧字段 `expiresIn`，单位仍为秒。
 - `targetMode` 支持：
   - `addresses`：地址共享（使用 `targetAddresses`，可传 1~N 个地址）
   - `groups`：按地址簿多分组共享（使用 `groupIds`，可传多个分组 ID，后端会展开为用户快照）
   - `all_users`：共享给所有已登录用户
-- 路径仍为 `/api/v1/public/share/user/create`，但请求体语义已切换到上述新结构；不再兼容旧的 `targetAddress` 单字段调用。
+- 路径：`/api/v1/public/share/user/create`
 
 创建响应新增字段：
 

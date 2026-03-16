@@ -20,7 +20,6 @@ type UserShareAudience struct {
 
 // UserShareRepository 定向分享仓储接口
 type UserShareRepository interface {
-	Create(ctx context.Context, item *shareuser.ShareUserItem) error
 	CreateWithAudiences(ctx context.Context, item *shareuser.ShareUserItem, audiences []UserShareAudience) error
 	GetByID(ctx context.Context, id string) (*shareuser.ShareUserItem, error)
 	GetByOwnerID(ctx context.Context, ownerID string) ([]*shareuser.ShareUserItem, error)
@@ -37,21 +36,6 @@ type PostgresUserShareRepository struct {
 // NewPostgresUserShareRepository 创建 PostgreSQL 定向分享仓储
 func NewPostgresUserShareRepository(db *sql.DB) *PostgresUserShareRepository {
 	return &PostgresUserShareRepository{db: db}
-}
-
-func (r *PostgresUserShareRepository) Create(ctx context.Context, item *shareuser.ShareUserItem) error {
-	if item == nil {
-		return fmt.Errorf("share item is required")
-	}
-	if strings.TrimSpace(item.TargetUserID) == "" {
-		return fmt.Errorf("target user id is required")
-	}
-	aud := UserShareAudience{
-		AudienceType: shareuser.AudienceTypeUser,
-		TargetUserID: item.TargetUserID,
-		TargetWallet: item.TargetWalletAddress,
-	}
-	return r.CreateWithAudiences(ctx, item, []UserShareAudience{aud})
 }
 
 func (r *PostgresUserShareRepository) CreateWithAudiences(ctx context.Context, item *shareuser.ShareUserItem, audiences []UserShareAudience) error {

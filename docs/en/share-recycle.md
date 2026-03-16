@@ -78,11 +78,17 @@ sequenceDiagram
 
 - Download, upload, create folder, rename, delete all require permission checks.
 
-### Compatibility & Evolution
+### Current Implementation
 
-- API path remains unchanged (`share/user/*`), but create payload is upgraded to `targetMode + targetAddresses/groupIds`; legacy `targetAddress` payload is no longer supported.
-- Backend persistence is now unified via `internal_share_items + internal_share_audiences`.
-- Legacy `share_user_items` rows are idempotently backfilled into the new model during startup migration.
+- Create payload is fixed to `targetMode + targetAddresses/groupIds`.
+- Internal-share metadata is persisted in `internal_share_items + internal_share_audiences`.
+
+### Upgrade Notes
+
+- Ensure DB credentials have `CREATE/ALTER/INDEX` permissions; startup runs schema migration.
+- If `share_user_items` exists in an upgraded database, startup migration idempotently imports historical rows into `internal_share_*`.
+- After upgrade, create API only accepts the new payload (`targetMode + targetAddresses/groupIds`); clients using `targetAddress` must be updated.
+- Verify post-upgrade by spot-checking data in `internal_share_items` and `internal_share_audiences`.
 
 ## Recycle Bin
 

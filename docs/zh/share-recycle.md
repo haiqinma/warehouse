@@ -78,11 +78,17 @@ sequenceDiagram
 
 - 下载、上传、创建目录、重命名、删除均会先校验对应权限位。
 
-### 兼容与演进
+### 当前实现
 
-- 接口路径保持 `share/user/*` 不变，但创建接口请求体已升级为 `targetMode + targetAddresses/groupIds`；不再兼容旧的 `targetAddress` 单字段调用。
-- 后端存储已切换到统一站内共享模型（`internal_share_items + internal_share_audiences`）。
-- 旧 `share_user_items` 会在启动迁移时自动回填到新模型，保证历史数据可读可用。
+- 创建接口固定使用 `targetMode + targetAddresses/groupIds`。
+- 站内共享元数据统一落在 `internal_share_items + internal_share_audiences`。
+
+### 升级注意事项
+
+- 升级前请确认数据库账号具备 `CREATE/ALTER/INDEX` 权限，启动时会执行表结构迁移。
+- 如果旧库里存在 `share_user_items`，升级启动会自动幂等导入到 `internal_share_*`，不需要手工触发。
+- 升级后创建接口只接受新请求体（`targetMode + targetAddresses/groupIds`），旧 `targetAddress` 调用需要改造客户端。
+- 建议升级后抽样检查：`internal_share_items` 与 `internal_share_audiences` 是否有历史数据。
 
 ## 回收站
 

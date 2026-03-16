@@ -43,19 +43,6 @@ func NewShareUserService(
 	}
 }
 
-// Create 创建定向分享（单地址包装）
-func (s *ShareUserService) Create(ctx context.Context, owner *user.User, targetWallet string, rawPath string, permissions string, expiry ShareExpiryInput) (*shareuser.ShareUserItem, error) {
-	targetWallet = strings.TrimSpace(targetWallet)
-	if targetWallet == "" {
-		return nil, fmt.Errorf("target wallet is required")
-	}
-	targetUsers, err := s.resolveTargetUsers(ctx, owner, []string{targetWallet})
-	if err != nil {
-		return nil, err
-	}
-	return s.createWithAudiences(ctx, owner, rawPath, permissions, expiry, targetUsers, false, "addresses")
-}
-
 // CreateByGroups 按地址簿多分组创建共享（受众会在创建时展开为用户快照）
 func (s *ShareUserService) CreateByGroups(ctx context.Context, owner *user.User, groupIDs []string, rawPath string, permissions string, expiry ShareExpiryInput) (*shareuser.ShareUserItem, error) {
 	targetUsers, err := s.resolveTargetUsersByGroups(ctx, owner, groupIDs)
@@ -63,11 +50,6 @@ func (s *ShareUserService) CreateByGroups(ctx context.Context, owner *user.User,
 		return nil, err
 	}
 	return s.createWithAudiences(ctx, owner, rawPath, permissions, expiry, targetUsers, false, "groups")
-}
-
-// CreateByGroup 按单个分组创建共享（内部兼容包装）
-func (s *ShareUserService) CreateByGroup(ctx context.Context, owner *user.User, groupID string, rawPath string, permissions string, expiry ShareExpiryInput) (*shareuser.ShareUserItem, error) {
-	return s.CreateByGroups(ctx, owner, []string{groupID}, rawPath, permissions, expiry)
 }
 
 // CreateByWallets 按地址列表创建共享
@@ -143,7 +125,7 @@ func (s *ShareUserService) createWithAudiences(
 	item.TargetCount = len(targetUsers)
 	item.AllUsers = allUsers
 	switch strings.TrimSpace(strings.ToLower(targetType)) {
-	case "group", "groups":
+	case "groups":
 		item.AudienceType = "groups"
 	case "addresses":
 		item.AudienceType = "addresses"

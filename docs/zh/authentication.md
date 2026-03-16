@@ -54,7 +54,7 @@
 ### API / 分享 / 回收站
 
 - 公开分享（Share）：仅允许读（下载），不允许写入。
-- 定向分享（Share User）：权限来自 `share_user_items.permissions`，下载/上传/创建目录/重命名/删除时校验对应权限位。
+- 定向分享（Share User）：权限来自 `internal_share_items.permissions`，下载/上传/创建目录/重命名/删除时校验对应权限位。
 - 回收站：仅允许资源所有者执行恢复/删除/清空操作。
 
 ### 管理员登录与用户管理

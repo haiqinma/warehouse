@@ -54,7 +54,7 @@ except UCAN `app:<appId>` caps which also enforce app path prefix and read/write
 ### API / Share / Recycle
 
 - Public share (Share): read-only (download only).
-- Share User: permissions come from `share_user_items.permissions`, checked for download/upload/create/rename/delete.
+- Share User: permissions come from `internal_share_items.permissions`, checked for download/upload/create/rename/delete.
 - Recycle: only the owner can recover/remove/clear items.
 
 ### Admin Login & User Management

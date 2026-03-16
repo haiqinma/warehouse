@@ -37,24 +37,6 @@ type ShareUserItem struct {
 	CreatedAt           time.Time
 }
 
-// NewShareUserItem 创建定向分享记录
-func NewShareUserItem(ownerID, ownerUsername, targetID, targetWallet, path, name string, isDir bool, permissions string, expiresAt *time.Time) *ShareUserItem {
-	now := time.Now()
-	return &ShareUserItem{
-		ID:                  uuid.NewString(),
-		OwnerUserID:         ownerID,
-		OwnerUsername:       ownerUsername,
-		TargetUserID:        targetID,
-		TargetWalletAddress: targetWallet,
-		Name:                name,
-		Path:                path,
-		IsDir:               isDir,
-		Permissions:         permissions,
-		ExpiresAt:           expiresAt,
-		CreatedAt:           now,
-	}
-}
-
 // NewInternalShareItem 创建内部共享记录（支持多受众）
 func NewInternalShareItem(ownerID, ownerUsername, path, name string, isDir bool, permissions string, expiresAt *time.Time) *ShareUserItem {
 	now := time.Now()

@@ -1000,7 +1000,7 @@ func formatTargetWallet(item *shareuser.ShareUserItem) string {
 	if item.AllUsers || item.AudienceType == shareuser.AudienceTypeAllUsers {
 		return "@all_users"
 	}
-	if item.AudienceType == "group" || item.AudienceType == "groups" {
+	if item.AudienceType == "groups" {
 		return fmt.Sprintf("@groups:%d", item.TargetCount)
 	}
 	if item.TargetCount > 1 || item.AudienceType == "addresses" {
@@ -1016,7 +1016,7 @@ func formatTargetWalletForViewer(item *shareuser.ShareUserItem, viewerWallet str
 	if item.AllUsers || item.AudienceType == shareuser.AudienceTypeAllUsers {
 		return "@all_users"
 	}
-	if item.AudienceType == "group" || item.AudienceType == "groups" {
+	if item.AudienceType == "groups" {
 		return fmt.Sprintf("@groups:%d", item.TargetCount)
 	}
 	if item.TargetCount > 1 || item.AudienceType == "addresses" {

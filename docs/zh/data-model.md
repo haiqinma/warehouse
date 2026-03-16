@@ -13,8 +13,6 @@ erDiagram
     USERS ||--o{ ADDRESS_CONTACTS : contacts
     ADDRESS_GROUPS ||--o{ ADDRESS_CONTACTS : contains
 
-    USERS ||--o{ SHARE_USER_ITEMS : owner_legacy
-    USERS ||--o{ SHARE_USER_ITEMS : target_legacy
     USERS ||--o{ INTERNAL_SHARE_ITEMS : owner
     INTERNAL_SHARE_ITEMS ||--o{ INTERNAL_SHARE_AUDIENCES : has
     USERS ||--o{ INTERNAL_SHARE_AUDIENCES : target_user
@@ -68,20 +66,6 @@ erDiagram
         datetime created_at
     }
 
-    SHARE_USER_ITEMS {
-        string id PK
-        string owner_user_id FK
-        string owner_username
-        string target_user_id FK
-        string target_wallet_address
-        string name
-        string path
-        bool is_dir
-        string permissions
-        datetime expires_at
-        datetime created_at
-    }
-
     INTERNAL_SHARE_ITEMS {
         string id PK
         string owner_user_id FK
@@ -130,15 +114,14 @@ erDiagram
 - **user_rules**：路径级权限规则，优先于默认权限。
 - **recycle_items**：回收站记录，用于恢复或永久删除。
 - **share_items**：公开分享记录，按 token 访问。
-- **share_user_items**：历史定向分享表（兼容旧版本保留）。
 - **internal_share_items / internal_share_audiences**：站内共享主表与受众表，统一承载单地址、分组展开和全员共享。
 - **address_groups / address_contacts**：地址簿与联系人分组。
 
-## 迁移与兼容说明
+## 升级提示（分享相关）
 
-- 启动迁移会把 `share_user_items` 的历史数据幂等回填到 `internal_share_items / internal_share_audiences`。
-- 新写入路径已切换到 `internal_share_*`，旧表主要用于兼容观察与回滚兜底。
-- API 路径保持不变（`/api/v1/public/share/user/*`），但创建请求体已升级为 `targetMode + targetAddresses/groupIds`，不再兼容旧 `targetAddress` 单字段调用。
+- 新安装只使用 `internal_share_items / internal_share_audiences`，不再创建 `share_user_items`。
+- 从旧版本升级时，如果数据库里存在 `share_user_items`，启动迁移会自动幂等导入到 `internal_share_*`。
+- 创建接口请求体统一使用 `targetMode + targetAddresses/groupIds`。
 
 ## 重要索引/约束（摘要）
 
