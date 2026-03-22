@@ -2866,6 +2866,19 @@ async function exitUploadTasks() {
   enterFiles(uploadTasksReturnPath.value || currentPath.value)
 }
 
+function openUploadTaskLocation(task: UploadTask) {
+  if (task.isShared) return
+  const rawTargetPath = String(task.targetPath || '').trim()
+  if (!rawTargetPath) return
+  const normalizedTargetPath = normalizeDirectoryPath(rawTargetPath)
+  const parentPath = normalizedTargetPath === '/'
+    ? '/'
+    : normalizeDirectoryPath(normalizedTargetPath.replace(/\/[^/]+\/?$/, '') || '/')
+  uploadTasksReturnView.value = 'files'
+  uploadTasksReturnPath.value = parentPath
+  enterFiles(parentPath)
+}
+
 function openCreateFolderDialog(mode: 'file' | 'shared') {
   if (mode === 'shared' && (!sharedActive.value || !sharedCanCreate.value)) return
   createFolderMode.value = mode
@@ -3995,6 +4008,7 @@ onBeforeUnmount(() => {
               :format-size="formatSize"
               :format-time="formatTime"
               :retry-task="retryUploadTask"
+              :open-task-location="openUploadTaskLocation"
             />
           </div>
           <div v-else class="content-body table-wrapper">
