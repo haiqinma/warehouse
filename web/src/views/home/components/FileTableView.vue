@@ -7,6 +7,7 @@ const props = defineProps<{
   loading: boolean
   onRowClick: (...args: any[]) => void
   canDragItem: (item: FileItem) => boolean
+  isDraggingItem: (item: FileItem) => boolean
   isMoveTarget: (item: FileItem) => boolean
   handleItemDragStart: (event: DragEvent, item: FileItem) => void
   handleItemDragEnd: () => void
@@ -87,6 +88,7 @@ function getRowClassName({ row }: { row: FileItem }) {
           class="file-name"
           :class="{
             'is-draggable': canDragItem(row),
+            'is-dragging': isDraggingItem(row),
             'is-drop-target': isMoveTarget(row)
           }"
           :draggable="canDragItem(row)"
@@ -205,6 +207,11 @@ function getRowClassName({ row }: { row: FileItem }) {
 
 .file-name.is-draggable:active {
   cursor: grabbing;
+}
+
+.file-name.is-dragging {
+  opacity: 0.48;
+  transform: scale(0.985);
 }
 
 .file-name.is-drop-target {

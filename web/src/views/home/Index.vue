@@ -90,6 +90,9 @@ const dragCounter = ref(0)
 const draggingFileItem = ref<FileItem | null>(null)
 const dragMoveTargetPath = ref('')
 const movingByDrag = ref(false)
+const draggingSharedItem = ref<FileItem | null>(null)
+const sharedDragMoveTargetPath = ref('')
+const movingSharedByDrag = ref(false)
 const shareLinkDialogVisible = ref(false)
 const shareLinkSubmitting = ref(false)
 const shareLinkTarget = ref<FileItem | null>(null)
@@ -532,6 +535,12 @@ const sharedBreadcrumbItems = computed(() => {
   }
   return items
 })
+const sharedParentTargetPath = computed(() => {
+  if (sharedPath.value === '/') return '/'
+  const parts = sharedPath.value.split('/').filter(Boolean)
+  parts.pop()
+  return parts.length > 0 ? '/' + parts.join('/') + '/' : '/'
+})
 const searchToken = computed(() => searchKeyword.value.trim().toLowerCase())
 const filteredFileList = computed(() => {
   const token = searchToken.value
@@ -695,7 +704,7 @@ function buildDavPath(path: string): string {
 function isInternalMoveDrag(event?: DragEvent | null): boolean {
   const types = event?.dataTransfer?.types
   if (!types) return false
-  return Array.from(types).includes('application/x-warehouse-file-move')
+  return Array.from(types).some(type => type.startsWith('application/x-warehouse-'))
 }
 
 function isExternalFileDrag(event?: DragEvent | null): boolean {
@@ -725,6 +734,13 @@ function normalizeItemPath(item: FileItem): string {
   const raw = stripUrlToPath(item.path || '/').trim()
   if (!raw.startsWith('/')) return '/' + raw
   return raw.replace(/\/{2,}/g, '/')
+}
+
+function normalizeSharedItemPath(item: FileItem): string {
+  if (item.isDir) return normalizeDirectoryPath(item.path)
+  const raw = String(item.path || '/').trim().replace(/\/{2,}/g, '/')
+  if (!raw.startsWith('/')) return '/' + raw
+  return raw
 }
 
 function normalizePathForSpaceMatch(path: string): string {
@@ -1655,9 +1671,7 @@ function goParent() {
 
 function goSharedParent() {
   if (sharedPath.value === '/') return
-  const parts = sharedPath.value.split('/').filter(Boolean)
-  parts.pop()
-  const parentPath = parts.length > 0 ? '/' + parts.join('/') + '/' : '/'
+  const parentPath = sharedParentTargetPath.value
   detailDrawerVisible.value = false
   sharedPath.value = parentPath
   persistSharedState()
@@ -2448,6 +2462,10 @@ function canDragItem(item: FileItem): boolean {
   return isFileView.value && !loading.value && !movingByDrag.value && item.path !== '/'
 }
 
+function isDraggingFile(item: FileItem): boolean {
+  return draggingFileItem.value?.path === item.path
+}
+
 function canMoveItemToDirectoryPath(source: FileItem | null, targetPath: string): boolean {
   if (!source) return false
   const sourcePath = normalizeItemPath(source)
@@ -2608,6 +2626,158 @@ function handleParentButtonDragLeave(event: DragEvent) {
 
 async function handleParentButtonDrop(event: DragEvent) {
   await handleBreadcrumbDrop(event, fileParentTargetPath.value)
+}
+
+function canDragSharedItem(item: FileItem): boolean {
+  return isSharedBrowse.value && sharedCanUpdate.value && !sharedEntriesLoading.value && !movingSharedByDrag.value && item.path !== '/'
+}
+
+function isDraggingSharedItem(item: FileItem): boolean {
+  return draggingSharedItem.value?.path === item.path
+}
+
+function canMoveSharedItemToDirectoryPath(source: FileItem | null, targetPath: string): boolean {
+  if (!source) return false
+  const sourcePath = normalizeSharedItemPath(source)
+  const normalizedTargetPath = normalizeDirectoryPath(targetPath)
+  if (sourcePath === normalizedTargetPath) return false
+  if (source.isDir && normalizedTargetPath.startsWith(sourcePath)) return false
+  const destinationPath = `${normalizedTargetPath}${source.name}${source.isDir ? '/' : ''}`
+  return destinationPath !== sourcePath
+}
+
+function canMoveSharedToDirectory(source: FileItem | null, target: FileItem): boolean {
+  return target.isDir && canMoveSharedItemToDirectoryPath(source, target.path)
+}
+
+function isSharedMoveTarget(item: FileItem): boolean {
+  return item.isDir && sharedDragMoveTargetPath.value !== '' && normalizeDirectoryPath(item.path) === sharedDragMoveTargetPath.value
+}
+
+function handleSharedItemDragStart(event: DragEvent, item: FileItem) {
+  if (!canDragSharedItem(item) || !event.dataTransfer) return
+  draggingSharedItem.value = item
+  sharedDragMoveTargetPath.value = ''
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('application/x-warehouse-shared-move', normalizeSharedItemPath(item))
+  event.dataTransfer.setData('text/plain', item.name)
+}
+
+function handleSharedItemDragEnd() {
+  draggingSharedItem.value = null
+  sharedDragMoveTargetPath.value = ''
+}
+
+function handleSharedDirectoryDragEnter(event: DragEvent, item: FileItem) {
+  if (!isInternalMoveDrag(event)) return
+  if (!canMoveSharedToDirectory(draggingSharedItem.value, item)) return
+  event.preventDefault()
+  sharedDragMoveTargetPath.value = normalizeDirectoryPath(item.path)
+}
+
+function handleSharedDirectoryDragOver(event: DragEvent, item: FileItem) {
+  if (!isInternalMoveDrag(event)) return
+  if (!canMoveSharedToDirectory(draggingSharedItem.value, item)) return
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move'
+  }
+  sharedDragMoveTargetPath.value = normalizeDirectoryPath(item.path)
+}
+
+function handleSharedDirectoryDragLeave(_event: DragEvent, item: FileItem) {
+  if (!isSharedMoveTarget(item)) return
+  sharedDragMoveTargetPath.value = ''
+}
+
+async function moveSharedItemToDirectoryPath(source: FileItem, targetPath: string) {
+  if (!sharedActive.value || !sharedCanUpdate.value) return
+  const sourcePath = normalizeSharedItemPath(source)
+  const targetDirPath = normalizeDirectoryPath(targetPath)
+  const destinationPath = `${targetDirPath}${source.name}${source.isDir ? '/' : ''}`
+  if (destinationPath === sourcePath) return
+
+  movingSharedByDrag.value = true
+  try {
+    await directShareApi.rename(
+      sharedActive.value.id,
+      normalizeShareRelative(sourcePath),
+      normalizeShareRelative(destinationPath)
+    )
+    await fetchSharedEntries(sharedPath.value)
+    showSuccess(`已移动到 ${targetDirPath}`)
+  } catch (error: any) {
+    console.error('共享拖拽移动失败:', error)
+    showError(error?.message || '移动失败')
+  } finally {
+    movingSharedByDrag.value = false
+  }
+}
+
+async function handleSharedDirectoryDrop(event: DragEvent, item: FileItem) {
+  if (!isInternalMoveDrag(event)) return
+  event.preventDefault()
+  const source = draggingSharedItem.value
+  handleSharedItemDragEnd()
+  if (!source) return
+  if (!canMoveSharedToDirectory(source, item)) return
+  await moveSharedItemToDirectoryPath(source, item.path)
+}
+
+function isSharedBreadcrumbMoveTarget(path: string): boolean {
+  return sharedDragMoveTargetPath.value !== '' && normalizeDirectoryPath(path) === sharedDragMoveTargetPath.value
+}
+
+function isSharedParentButtonMoveTarget(): boolean {
+  return sharedPath.value !== '/' && isSharedBreadcrumbMoveTarget(sharedParentTargetPath.value)
+}
+
+function handleSharedBreadcrumbDragEnter(event: DragEvent, path: string) {
+  if (!isInternalMoveDrag(event)) return
+  if (!canMoveSharedItemToDirectoryPath(draggingSharedItem.value, path)) return
+  event.preventDefault()
+  sharedDragMoveTargetPath.value = normalizeDirectoryPath(path)
+}
+
+function handleSharedBreadcrumbDragOver(event: DragEvent, path: string) {
+  if (!isInternalMoveDrag(event)) return
+  if (!canMoveSharedItemToDirectoryPath(draggingSharedItem.value, path)) return
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move'
+  }
+  sharedDragMoveTargetPath.value = normalizeDirectoryPath(path)
+}
+
+function handleSharedBreadcrumbDragLeave(_event: DragEvent, path: string) {
+  if (!isSharedBreadcrumbMoveTarget(path)) return
+  sharedDragMoveTargetPath.value = ''
+}
+
+async function handleSharedBreadcrumbDrop(event: DragEvent, path: string) {
+  if (!isInternalMoveDrag(event)) return
+  event.preventDefault()
+  const source = draggingSharedItem.value
+  handleSharedItemDragEnd()
+  if (!source) return
+  if (!canMoveSharedItemToDirectoryPath(source, path)) return
+  await moveSharedItemToDirectoryPath(source, path)
+}
+
+function handleSharedParentButtonDragEnter(event: DragEvent) {
+  handleSharedBreadcrumbDragEnter(event, sharedParentTargetPath.value)
+}
+
+function handleSharedParentButtonDragOver(event: DragEvent) {
+  handleSharedBreadcrumbDragOver(event, sharedParentTargetPath.value)
+}
+
+function handleSharedParentButtonDragLeave(event: DragEvent) {
+  handleSharedBreadcrumbDragLeave(event, sharedParentTargetPath.value)
+}
+
+async function handleSharedParentButtonDrop(event: DragEvent) {
+  await handleSharedBreadcrumbDrop(event, sharedParentTargetPath.value)
 }
 
 // 删除文件
@@ -3713,7 +3883,17 @@ onBeforeUnmount(() => {
                   <el-button circle :icon="ArrowLeft" @click="backToSharedList" />
                 </el-tooltip>
                 <el-tooltip content="返回上级" placement="top">
-                  <el-button circle :icon="ArrowUp" @click="goSharedParent" :disabled="sharedPath === '/'" />
+                  <el-button
+                    circle
+                    :icon="ArrowUp"
+                    :class="{ 'is-drop-target': isSharedParentButtonMoveTarget() }"
+                    @click="goSharedParent"
+                    :disabled="sharedPath === '/'"
+                    @dragenter="handleSharedParentButtonDragEnter"
+                    @dragover="handleSharedParentButtonDragOver"
+                    @dragleave="handleSharedParentButtonDragLeave"
+                    @drop="handleSharedParentButtonDrop"
+                  />
                 </el-tooltip>
               </template>
               <template v-else-if="showRecycle || showShare || showSharedWithMe || showUploadTasks">
@@ -3758,12 +3938,30 @@ onBeforeUnmount(() => {
                     <div class="breadcrumb">
                       <el-breadcrumb separator="/">
                         <el-breadcrumb-item>
-                          <button class="breadcrumb-link" type="button" @click="setSharedPath('/')">
+                          <button
+                            class="breadcrumb-link"
+                            :class="{ 'is-drop-target': isSharedBreadcrumbMoveTarget('/') }"
+                            type="button"
+                            @click="setSharedPath('/')"
+                            @dragenter="handleSharedBreadcrumbDragEnter($event, '/')"
+                            @dragover="handleSharedBreadcrumbDragOver($event, '/')"
+                            @dragleave="handleSharedBreadcrumbDragLeave($event, '/')"
+                            @drop="handleSharedBreadcrumbDrop($event, '/')"
+                          >
                             {{ sharedActive.name }}
                           </button>
                         </el-breadcrumb-item>
                         <el-breadcrumb-item v-for="crumb in sharedBreadcrumbItems" :key="crumb.path">
-                          <button class="breadcrumb-link" type="button" @click="setSharedPath(crumb.path)">
+                          <button
+                            class="breadcrumb-link"
+                            :class="{ 'is-drop-target': isSharedBreadcrumbMoveTarget(crumb.path) }"
+                            type="button"
+                            @click="setSharedPath(crumb.path)"
+                            @dragenter="handleSharedBreadcrumbDragEnter($event, crumb.path)"
+                            @dragover="handleSharedBreadcrumbDragOver($event, crumb.path)"
+                            @dragleave="handleSharedBreadcrumbDragLeave($event, crumb.path)"
+                            @drop="handleSharedBreadcrumbDrop($event, crumb.path)"
+                          >
                             {{ crumb.name }}
                           </button>
                         </el-breadcrumb-item>
@@ -4277,6 +4475,15 @@ onBeforeUnmount(() => {
               :shared-entries="filteredSharedEntries"
               :loading="(sharedActive ? sharedEntriesLoading : sharedWithMeLoading) && !manualRefresh"
               :on-row-click="handleRowClick"
+              :can-drag-shared-item="canDragSharedItem"
+              :is-dragging-shared-item="isDraggingSharedItem"
+              :is-shared-move-target="isSharedMoveTarget"
+              :handle-shared-item-drag-start="handleSharedItemDragStart"
+              :handle-shared-item-drag-end="handleSharedItemDragEnd"
+              :handle-shared-directory-drag-enter="handleSharedDirectoryDragEnter"
+              :handle-shared-directory-drag-over="handleSharedDirectoryDragOver"
+              :handle-shared-directory-drag-leave="handleSharedDirectoryDragLeave"
+              :handle-shared-directory-drop="handleSharedDirectoryDrop"
               :format-time="formatTime"
               :format-size="formatSize"
               :shorten-address="shortenAddress"
@@ -4298,6 +4505,7 @@ onBeforeUnmount(() => {
               :loading="loading && !manualRefresh"
               :on-row-click="handleRowClick"
               :can-drag-item="canDragItem"
+              :is-dragging-item="isDraggingFile"
               :is-move-target="isMoveTarget"
               :handle-item-drag-start="handleItemDragStart"
               :handle-item-drag-end="handleItemDragEnd"
