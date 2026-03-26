@@ -60,8 +60,14 @@ web3:
   ucan:
     enabled: true
     audience: "did:web:127.0.0.1:6065"
-    required_resource: "app:*"
-    required_action: "read,write"
+    # 推荐：使用 required_capabilities（with/can）声明必需能力；支持多个条目
+    required_capabilities:
+      - with: "app:*"
+        can: "read,write"
+    # 注意：当 required_capabilities 非空时，下面两个兼容字段会被忽略
+    # 兼容字段（旧配置）：required_resource + required_action
+    # required_resource: "app:*"
+    # required_action: "read,write"
     app_scope:
       path_prefix: "/apps"
 

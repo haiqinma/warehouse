@@ -1,6 +1,9 @@
 package auth
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestExtractAppCapsFromCapsRejectsWildcardAndInvalidAppID(t *testing.T) {
 	caps := []UcanCapability{
@@ -36,6 +39,74 @@ func TestExtractAppCapsFromCapsRejectsWildcardAndInvalidAppID(t *testing.T) {
 	}
 }
 
+func TestExtractAppCapsFromCapsAcceptsScopedAllAndLegacyResource(t *testing.T) {
+	caps := []UcanCapability{
+		{With: "app:all:dapp-a", Can: "write"},
+		{Resource: "app:dapp-b", Action: "read"},
+		{Resource: "app:profile:dapp-c", Action: "read"},
+	}
+
+	extracted := extractAppCapsFromCaps(caps, "app:")
+	if !extracted.HasAppCaps {
+		t.Fatalf("expected HasAppCaps=true")
+	}
+
+	if got := extracted.AppCaps["dapp-a"]; len(got) != 1 || got[0] != "write" {
+		t.Fatalf("unexpected dapp-a actions: %#v", got)
+	}
+	if got := extracted.AppCaps["dapp-b"]; len(got) != 1 || got[0] != "read" {
+		t.Fatalf("unexpected dapp-b actions: %#v", got)
+	}
+	if !containsString(extracted.InvalidAppCaps, "app:profile:dapp-c#read") {
+		t.Fatalf("expected invalid scope app cap, got %#v", extracted.InvalidAppCaps)
+	}
+}
+
+func TestExtractCapabilitiesSupportsCapWithCanAndAtt(t *testing.T) {
+	rawCaps := []json.RawMessage{
+		json.RawMessage(`{"resource":"profile","action":"read"}`),
+		json.RawMessage(`{"with":"app:all:dapp-a","can":"write","nb":{"path":"/apps/dapp-a"}}`),
+	}
+	att := map[string]map[string]json.RawMessage{
+		"app:all:dapp-b": {
+			"read": json.RawMessage(`[{"path":"/apps/dapp-b"}]`),
+		},
+	}
+
+	caps, err := extractCapabilities(rawCaps, att)
+	if err != nil {
+		t.Fatalf("extractCapabilities failed: %v", err)
+	}
+	if !hasCapability(caps, "profile", "read") {
+		t.Fatalf("missing legacy resource/action capability: %#v", caps)
+	}
+	if !hasCapability(caps, "app:all:dapp-a", "write") {
+		t.Fatalf("missing with/can capability: %#v", caps)
+	}
+	if !hasCapability(caps, "app:all:dapp-b", "read") {
+		t.Fatalf("missing att capability: %#v", caps)
+	}
+}
+
+func TestBuildRequiredUcanCapsSupportsAdditionalCapabilities(t *testing.T) {
+	additional := []UcanCapability{
+		{With: "profile", Can: "read"},
+		{Resource: "app:*", Action: "read,write"},
+		{With: "profile", Can: "read"}, // duplicate should be deduped
+	}
+
+	caps := BuildRequiredUcanCaps("app:*", "read,write", additional)
+	if len(caps) != 2 {
+		t.Fatalf("expected 2 deduped caps, got %#v", caps)
+	}
+	if !hasCapability(caps, "app:*", "read,write") {
+		t.Fatalf("missing app required cap: %#v", caps)
+	}
+	if !hasCapability(caps, "profile", "read") {
+		t.Fatalf("missing profile required cap: %#v", caps)
+	}
+}
+
 func TestExtractAppCapsFromCapsWithoutAppResource(t *testing.T) {
 	caps := []UcanCapability{
 		{Resource: "profile", Action: "read"},
@@ -56,6 +127,15 @@ func TestExtractAppCapsFromCapsWithoutAppResource(t *testing.T) {
 func containsString(list []string, target string) bool {
 	for _, item := range list {
 		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCapability(caps []UcanCapability, resource, action string) bool {
+	for _, cap := range caps {
+		if cap.normalizedResource() == resource && cap.normalizedAction() == action {
 			return true
 		}
 	}

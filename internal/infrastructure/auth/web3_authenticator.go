@@ -215,7 +215,7 @@ func (a *Web3Authenticator) EnrichContext(ctx context.Context, credentials inter
 	if len(extracted.InvalidAppCaps) > 0 {
 		a.logger.Warn("ucan invalid app capability detected",
 			zap.String("invalid_app_caps", strings.Join(extracted.InvalidAppCaps, ", ")),
-			zap.String("hint", "use resource `app:<appId>` without wildcard, e.g. app:dapp.example.com"),
+			zap.String("hint", "use resource `app:all:<appId>` (or legacy `app:<appId>`) without wildcard, e.g. app:all:dapp.example.com"),
 		)
 	}
 	return middleware.WithUcanContext(ctx, &middleware.UcanContext{

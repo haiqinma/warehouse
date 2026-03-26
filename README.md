@@ -96,8 +96,11 @@ web3:
   ucan:
     enabled: true
     audience: "did:web:localhost:6065"
-    required_resource: "profile"
-    required_action: "read"
+    required_capabilities:
+      - with: "app:*"
+        can: "read,write"
+    app_scope:
+      path_prefix: "/apps"
 ```
 
 # 邮箱验证码登录

@@ -68,7 +68,7 @@ Authorization: Basic <base64(username:password)>
 
 说明：
 - Bearer Token 由 `/api/v1/public/auth/*` 获取（JWT），或由 UCAN 颁发方签发（UCAN）。
-- UCAN 需在配置中开启 `web3.ucan.enabled: true`，并设置 `audience/resource/action` 与令牌能力匹配。
+- UCAN 需在配置中开启 `web3.ucan.enabled: true`，并设置 `audience` 与必需能力（推荐 `required_capabilities`，兼容 `required_resource/required_action`）与令牌能力匹配。
 
 ## 3. 认证接口流程（challenge / verify / refresh）
 

@@ -3,7 +3,7 @@
 本文档基于当前后端实现，说明 WebDAV 服务如何校验 UCAN（User-Controlled Authorization Networks）令牌，以及能力匹配规则与排查方式。
 
 > 重点：本服务默认只做“认证准入 + 必需能力校验”，不把 UCAN 的 action 映射为通用 CRUD 权限；  
-> 但当使用 `app:<appId>` 能力时，会基于 action（`read`/`write`/`create`/`update`/`delete`/`move`/`copy`）对应用目录做访问限制。
+> 但当使用应用能力（`app:all:<appId>` 或兼容 `app:<appId>`）时，会基于 action（`read`/`write`/`create`/`update`/`delete`/`move`/`copy`）对应用目录做访问限制。
 
 ## 1. 启用方式与配置
 
@@ -14,27 +14,33 @@ web3:
   ucan:
     enabled: true
     audience: "did:web:127.0.0.1:6065"
-    required_resource: "app:*"
-    required_action: "read,write"
+    required_capabilities:
+      - with: "app:*"
+        can: "read,write"
+    # 兼容旧字段（可选）
+    # required_resource: "app:*"
+    # required_action: "read,write"
     app_scope:
       path_prefix: "/apps"
 ```
 
-只读模式：将 `required_action` 改为 `read`，写操作会返回 403。
+只读模式：将 `can` 改为 `read`（或兼容字段 `required_action=read`），写操作会返回 403。
 
 - `enabled`: 开启 UCAN 校验。
 - `audience`: UCAN 的 `aud` 必须匹配此值。为空时默认 `did:web:localhost:<port>`。
-- `required_resource` / `required_action`：会组合成“必需能力”，用于校验 UCAN 的 `cap`。
-  - 若两者都为空：不做能力校验（仅验证 UCAN 本身）。
-  - 若其中一个为空：会自动补 `*`。
+- `required_capabilities`: 必需能力列表，推荐使用标准字段 `with/can`（支持多条）。
+  - 兼容字段：`resource/action`（同义字段）。
+  - 若列表非空，`required_resource` / `required_action` 会被忽略；若列表为空，再回退读取兼容字段。
   - 支持多值（`,` 或 `|` 分隔），例如 `read,write` 或 `read`。
   - 支持动作：`read`、`write`、`create`、`update`、`delete`、`move`、`copy`（`write` 视为写操作总开关）。
 - `app_scope.path_prefix`：应用目录根前缀，默认 `/apps`。
-- 当 UCAN `cap` 中包含 `app:<appId>` 时，会自动启用应用目录隔离（应用级 Path Scope）：
-  - 服务端会提取所有 `resource` 以 `app:` 开头的 cap，形成 `appId -> actions` 白名单。
+- 当 UCAN 能力中包含 `app:` 命名空间资源时，会自动启用应用目录隔离（应用级 Path Scope）：
+  - 服务端会提取所有 `with/resource` 以 `app:` 开头的能力，形成 `appId -> actions` 白名单。
+  - 推荐格式：`app:all:<appId>`；兼容格式：`app:<appId>`。
+  - `app:<scope>:<appId>` 中当前仅接受 `scope=all`，其它 scope 会被判定为非法 app 能力。
   - `appId` 必须是单段字符串（`a-zA-Z0-9._-`），不支持 `*` 通配。
   - 请求路径必须落在 `${app_scope.path_prefix}/<appId>/...` 下，否则直接拒绝。
-  - `action` 由 UCAN cap 决定，且会被 `required_action` 进一步过滤（例如只读模式下写操作会被拒绝）。
+  - `action` 由 UCAN 能力决定，且会被 required 配置进一步过滤（例如只读模式下写操作会被拒绝）。
   - **如果一个 UCAN 同时包含多个 `app:<appId>`**，则该 UCAN 可以访问多个应用目录；每次请求会根据路径选择对应 appId 校验。
     - MOVE/COPY 会同时校验源路径与目标路径；若两个 appId 都在 cap 中且动作允许，则可跨应用移动/复制。
     - 若不希望单个 UCAN 访问多个应用，建议为每个 app 单独签发 UCAN（或在网关/业务层禁止跨 app MOVE/COPY）。
@@ -58,10 +64,13 @@ web3:
 
 - `payload.aud` 必须与 `web3.ucan.audience` 完全一致。
 
-### 3.3 能力校验（cap）
+### 3.3 能力校验（cap / att）
 
-- UCAN 的能力字段：`cap: [{ resource, action }]`。
-- 服务端会把 `required_resource` / `required_action` 组合成必需能力列表。
+- 服务端会把 UCAN 能力归一化后再做匹配，支持三种输入：
+  - `cap: [{ with, can, nb? }]`（推荐）
+  - `cap: [{ resource, action, nb? }]`（兼容历史）
+  - `att: { "<with>": { "<can>": <constraints> } }`（ReCap 形式）
+- 服务端会把 `required_capabilities`（或兼容字段 `required_resource/required_action`）组合成必需能力列表。
 - 当前匹配规则：
   - `*` 表示全匹配。
   - 以 `*` 结尾的前缀匹配（如 `app:*` 或 `files*`）。
@@ -112,8 +121,12 @@ web3:
   ucan:
     enabled: true
     audience: "did:web:webdav.your-domain.com"
-    required_resource: "app:*"
-    required_action: "read,write"
+    required_capabilities:
+      - with: "app:*"
+        can: "read,write"
+    # 兼容旧字段（可选）
+    # required_resource: "app:*"
+    # required_action: "read,write"
     app_scope:
       path_prefix: "/apps"
 ```
@@ -121,12 +134,11 @@ web3:
 配置含义：
 - `enabled: true`：启用 UCAN 校验。
 - `audience`：**WebDAV 服务自身的 DID**，必须与 UCAN `aud` 完全一致。
-- `required_resource: "app:*"`：强制 UCAN 必须携带 `app:<appId>` 能力（触发应用目录隔离）。
-- `required_action: "read,write"`：允许读写；只读场景改为 `read`（写操作会 403）。
+- `required_capabilities`：强制 UCAN 必须携带 `with=app:*` 且 `can` 覆盖 `read,write` 的能力（触发应用目录隔离）。
 - `app_scope.path_prefix`：应用目录根前缀（默认 `/apps`），会把 `app:<appId>` 映射为 `/apps/<appId>/...`。
 
 如需兼容其他后端能力（比如非 WebDAV 的 `profile#read`），请在 **UCAN cap 中额外加入**对应能力，
-但 `required_resource/action` 仍建议以 `app:*` 为主，避免绕过应用隔离。
+但 required 能力仍建议以 `app:*` 为主，避免绕过应用隔离。
 
 ### 5.2 UCAN 令牌能力（cap）
 

@@ -103,16 +103,26 @@ type EmailConfig struct {
 
 // UCANConfig UCAN authentication configuration
 type UCANConfig struct {
-	Enabled          bool           `yaml:"enabled"`
-	Audience         string         `yaml:"audience"`
-	RequiredResource string         `yaml:"required_resource"`
-	RequiredAction   string         `yaml:"required_action"`
-	AppScope         AppScopeConfig `yaml:"app_scope"`
+	Enabled              bool                     `yaml:"enabled"`
+	Audience             string                   `yaml:"audience"`
+	RequiredResource     string                   `yaml:"required_resource"`
+	RequiredAction       string                   `yaml:"required_action"`
+	RequiredCapabilities []UCANRequiredCapability `yaml:"required_capabilities"`
+	AppScope             AppScopeConfig           `yaml:"app_scope"`
 }
 
 // AppScopeConfig config for UCAN app scope enforcement.
 type AppScopeConfig struct {
 	PathPrefix string `yaml:"path_prefix"`
+}
+
+// UCANRequiredCapability declares a required capability entry in config.
+// Canonical fields are with/can; resource/action are legacy aliases.
+type UCANRequiredCapability struct {
+	With     string `yaml:"with"`
+	Can      string `yaml:"can"`
+	Resource string `yaml:"resource"`
+	Action   string `yaml:"action"`
 }
 
 // SecurityConfig 安全配置

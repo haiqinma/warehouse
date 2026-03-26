@@ -49,7 +49,7 @@ func resolveAppScope(ctx context.Context, cfg *config.Config) (appScopeInfo, err
 		}
 		return appScopeInfo{}, nil
 	}
-	allowedActions, hasFilter := parseAllowedActions(cfg.Web3.UCAN.RequiredAction)
+	allowedActions, hasFilter := resolveAllowedAppActions(cfg)
 	actions := make(map[string]appActionSet, len(ucanCtx.AppCaps))
 	for appID, rawActions := range ucanCtx.AppCaps {
 		set := buildActionSet(rawActions)
@@ -175,13 +175,54 @@ func normalizeScopePath(rawPath string) string {
 	return clean
 }
 
-func parseAllowedActions(raw string) (appActionSet, bool) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
+func resolveAllowedAppActions(cfg *config.Config) (appActionSet, bool) {
+	if cfg == nil {
 		return appActionSet{}, false
 	}
-	parts := splitActionList(raw)
-	return buildActionSet(parts), true
+
+	appActions := make([]string, 0)
+	hasAppRequirement := false
+	for _, cap := range cfg.Web3.UCAN.RequiredCapabilities {
+		resource := strings.TrimSpace(cap.With)
+		if resource == "" {
+			resource = strings.TrimSpace(cap.Resource)
+		}
+		if !isAppRequirementResource(resource) {
+			continue
+		}
+		hasAppRequirement = true
+
+		action := strings.TrimSpace(cap.Can)
+		if action == "" {
+			action = strings.TrimSpace(cap.Action)
+		}
+		if action == "" {
+			action = "*"
+		}
+		appActions = append(appActions, splitActionList(action)...)
+	}
+
+	// Legacy required_resource/required_action is only used when
+	// required_capabilities is not configured.
+	if len(cfg.Web3.UCAN.RequiredCapabilities) == 0 {
+		legacyResource := strings.TrimSpace(cfg.Web3.UCAN.RequiredResource)
+		if isAppRequirementResource(legacyResource) {
+			hasAppRequirement = true
+			legacyAction := strings.TrimSpace(cfg.Web3.UCAN.RequiredAction)
+			if legacyAction == "" {
+				legacyAction = "*"
+			}
+			appActions = append(appActions, splitActionList(legacyAction)...)
+		}
+	}
+
+	if !hasAppRequirement {
+		return appActionSet{}, false
+	}
+	if len(appActions) == 0 {
+		appActions = []string{"*"}
+	}
+	return buildActionSet(appActions), true
 }
 
 func buildActionSet(actions []string) appActionSet {
@@ -261,7 +302,23 @@ func requiresAppScope(cfg *config.Config) bool {
 	if cfg == nil {
 		return false
 	}
-	resource := strings.TrimSpace(cfg.Web3.UCAN.RequiredResource)
+	if len(cfg.Web3.UCAN.RequiredCapabilities) > 0 {
+		for _, cap := range cfg.Web3.UCAN.RequiredCapabilities {
+			resource := strings.TrimSpace(cap.With)
+			if resource == "" {
+				resource = strings.TrimSpace(cap.Resource)
+			}
+			if isAppRequirementResource(resource) {
+				return true
+			}
+		}
+		return false
+	}
+	return isAppRequirementResource(cfg.Web3.UCAN.RequiredResource)
+}
+
+func isAppRequirementResource(raw string) bool {
+	resource := strings.TrimSpace(raw)
 	if resource == "" {
 		return false
 	}

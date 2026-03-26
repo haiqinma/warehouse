@@ -1,10 +1,12 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,19 +18,24 @@ import (
 
 const base58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
-// UcanCapability defines an action permitted on a resource.
+// UcanCapability is the normalized internal representation for UCAN capabilities.
+// It accepts legacy {resource,action}, standard-ish {with,can}, and att-derived forms.
 type UcanCapability struct {
-	Resource string `json:"resource"`
-	Action   string `json:"action"`
+	With        string            `json:"with,omitempty"`
+	Can         string            `json:"can,omitempty"`
+	Resource    string            `json:"resource,omitempty"`
+	Action      string            `json:"action,omitempty"`
+	Constraints []json.RawMessage `json:"constraints,omitempty"`
 }
 
 type ucanRootProof struct {
-	Type string           `json:"type"`
-	Iss  string           `json:"iss"`
-	Aud  string           `json:"aud"`
-	Cap  []UcanCapability `json:"cap"`
-	Exp  int64            `json:"exp"`
-	Nbf  *int64           `json:"nbf,omitempty"`
+	Type string                                `json:"type"`
+	Iss  string                                `json:"iss"`
+	Aud  string                                `json:"aud"`
+	Cap  []json.RawMessage                     `json:"cap"`
+	Att  map[string]map[string]json.RawMessage `json:"att,omitempty"`
+	Exp  int64                                 `json:"exp"`
+	Nbf  *int64                                `json:"nbf,omitempty"`
 	Siwe struct {
 		Message   string `json:"message"`
 		Signature string `json:"signature"`
@@ -36,19 +43,197 @@ type ucanRootProof struct {
 }
 
 type ucanStatement struct {
-	Aud string           `json:"aud"`
-	Cap []UcanCapability `json:"cap"`
-	Exp int64            `json:"exp"`
-	Nbf *int64           `json:"nbf,omitempty"`
+	Aud  string                                `json:"aud"`
+	Cap  []json.RawMessage                     `json:"cap"`
+	Att  map[string]map[string]json.RawMessage `json:"att,omitempty"`
+	Exp  int64                                 `json:"exp"`
+	Nbf  *int64                                `json:"nbf,omitempty"`
+	Caps []UcanCapability                      `json:"-"`
 }
 
 type ucanPayload struct {
-	Iss string            `json:"iss"`
-	Aud string            `json:"aud"`
-	Cap []UcanCapability  `json:"cap"`
-	Exp int64             `json:"exp"`
-	Nbf *int64            `json:"nbf,omitempty"`
-	Prf []json.RawMessage `json:"prf"`
+	Iss  string                                `json:"iss"`
+	Aud  string                                `json:"aud"`
+	Cap  []json.RawMessage                     `json:"cap"`
+	Att  map[string]map[string]json.RawMessage `json:"att,omitempty"`
+	Exp  int64                                 `json:"exp"`
+	Nbf  *int64                                `json:"nbf,omitempty"`
+	Prf  []json.RawMessage                     `json:"prf"`
+	Caps []UcanCapability                      `json:"-"`
+}
+
+func (c UcanCapability) normalizedResource() string {
+	resource := strings.TrimSpace(c.With)
+	if resource == "" {
+		resource = strings.TrimSpace(c.Resource)
+	}
+	return resource
+}
+
+func (c UcanCapability) normalizedAction() string {
+	action := strings.TrimSpace(c.Can)
+	if action == "" {
+		action = strings.TrimSpace(c.Action)
+	}
+	return normalizeActionExpression(action)
+}
+
+func newNormalizedCapability(resource, action string, constraints []json.RawMessage) UcanCapability {
+	resource = strings.TrimSpace(resource)
+	action = normalizeActionExpression(action)
+	return UcanCapability{
+		With:        resource,
+		Can:         action,
+		Resource:    resource,
+		Action:      action,
+		Constraints: constraints,
+	}
+}
+
+func normalizeActionExpression(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return ""
+	}
+	raw = strings.ReplaceAll(raw, "|", ",")
+	parts := strings.Split(raw, ",")
+	normalized := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if _, ok := seen[part]; ok {
+			continue
+		}
+		seen[part] = struct{}{}
+		normalized = append(normalized, part)
+	}
+	if len(normalized) == 0 {
+		return ""
+	}
+	if len(normalized) == 1 {
+		return normalized[0]
+	}
+	sort.Strings(normalized)
+	return strings.Join(normalized, ",")
+}
+
+func normalizeConstraintList(raw json.RawMessage) []json.RawMessage {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	if trimmed[0] == '[' {
+		var list []json.RawMessage
+		if err := json.Unmarshal(trimmed, &list); err == nil {
+			return list
+		}
+	}
+	return []json.RawMessage{json.RawMessage(trimmed)}
+}
+
+func parseCapabilityFromObject(raw json.RawMessage) (UcanCapability, bool, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return UcanCapability{}, false, err
+	}
+
+	readString := func(keys ...string) string {
+		for _, key := range keys {
+			valueRaw, ok := obj[key]
+			if !ok {
+				continue
+			}
+			var value string
+			if err := json.Unmarshal(valueRaw, &value); err == nil && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+		return ""
+	}
+
+	resource := readString("with", "resource")
+	action := readString("can", "action")
+	if resource == "" && action == "" {
+		return UcanCapability{}, false, nil
+	}
+
+	constraints := normalizeConstraintList(obj["nb"])
+	return newNormalizedCapability(resource, action, constraints), true, nil
+}
+
+func parseCapabilityArray(rawCaps []json.RawMessage) ([]UcanCapability, error) {
+	caps := make([]UcanCapability, 0, len(rawCaps))
+	for _, raw := range rawCaps {
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+			continue
+		}
+		capability, ok, err := parseCapabilityFromObject(trimmed)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		caps = append(caps, capability)
+	}
+	return caps, nil
+}
+
+func parseCapabilitiesFromAtt(att map[string]map[string]json.RawMessage) []UcanCapability {
+	if len(att) == 0 {
+		return nil
+	}
+	caps := make([]UcanCapability, 0)
+	for resource, actionMap := range att {
+		resource = strings.TrimSpace(resource)
+		if resource == "" {
+			continue
+		}
+		for action, constraintRaw := range actionMap {
+			action = strings.TrimSpace(action)
+			if action == "" {
+				continue
+			}
+			constraints := normalizeConstraintList(constraintRaw)
+			caps = append(caps, newNormalizedCapability(resource, action, constraints))
+		}
+	}
+	return caps
+}
+
+func dedupeCapabilities(caps []UcanCapability) []UcanCapability {
+	if len(caps) == 0 {
+		return nil
+	}
+	result := make([]UcanCapability, 0, len(caps))
+	seen := make(map[string]struct{}, len(caps))
+	for _, cap := range caps {
+		resource := cap.normalizedResource()
+		action := cap.normalizedAction()
+		if resource == "" && action == "" {
+			continue
+		}
+		key := resource + "#" + action
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, newNormalizedCapability(resource, action, cap.Constraints))
+	}
+	return result
+}
+
+func extractCapabilities(rawCaps []json.RawMessage, att map[string]map[string]json.RawMessage) ([]UcanCapability, error) {
+	capsFromArray, err := parseCapabilityArray(rawCaps)
+	if err != nil {
+		return nil, err
+	}
+	caps := append(capsFromArray, parseCapabilitiesFromAtt(att)...)
+	return dedupeCapabilities(caps), nil
 }
 
 // UcanVerifier validates UCAN invocation tokens.
@@ -63,16 +248,17 @@ type UcanVerifier struct {
 func NewUcanVerifier(enabled bool, audience string, requiredCaps []UcanCapability, logger *zap.Logger) *UcanVerifier {
 	caps := make([]UcanCapability, 0, len(requiredCaps))
 	for _, cap := range requiredCaps {
-		if strings.TrimSpace(cap.Resource) == "" && strings.TrimSpace(cap.Action) == "" {
+		normalized, ok := normalizeRequiredCapability(cap)
+		if !ok {
 			continue
 		}
-		caps = append(caps, cap)
+		caps = append(caps, normalized)
 	}
 
 	return &UcanVerifier{
 		enabled:      enabled,
 		audience:     strings.TrimSpace(audience),
-		requiredCaps: caps,
+		requiredCaps: dedupeCapabilities(caps),
 		logger:       logger,
 	}
 }
@@ -105,11 +291,11 @@ func (v *UcanVerifier) VerifyInvocation(token string) (string, error) {
 	if v.audience != "" && payload.Aud != v.audience {
 		return "", fmt.Errorf("UCAN audience mismatch")
 	}
-	if len(v.requiredCaps) > 0 && !capsAllow(payload.Cap, v.requiredCaps) {
+	if len(v.requiredCaps) > 0 && !capsAllow(payload.Caps, v.requiredCaps) {
 		if v.logger != nil {
 			v.logger.Warn("ucan capability denied",
 				zap.String("required_caps", formatCaps(v.requiredCaps)),
-				zap.String("provided_caps", formatCaps(payload.Cap)),
+				zap.String("provided_caps", formatCaps(payload.Caps)),
 				zap.String("audience", payload.Aud),
 				zap.String("issuer", payload.Iss),
 			)
@@ -117,7 +303,7 @@ func (v *UcanVerifier) VerifyInvocation(token string) (string, error) {
 		return "", fmt.Errorf("UCAN capability denied")
 	}
 
-	iss, err := verifyProofChain(payload.Iss, payload.Cap, exp, payload.Prf)
+	iss, err := verifyProofChain(payload.Iss, payload.Caps, exp, payload.Prf)
 	if err != nil {
 		v.debug("ucan proof chain verification failed", zap.Error(err))
 		return "", err
@@ -132,11 +318,38 @@ func (v *UcanVerifier) VerifyInvocation(token string) (string, error) {
 }
 
 // BuildRequiredUcanCaps builds a capability list from resource/action settings.
-func BuildRequiredUcanCaps(resource, action string) []UcanCapability {
+func BuildRequiredUcanCaps(resource, action string, additional []UcanCapability) []UcanCapability {
+	caps := make([]UcanCapability, 0, len(additional)+1)
+
 	resource = strings.TrimSpace(resource)
-	action = strings.TrimSpace(action)
+	action = strings.ToLower(strings.TrimSpace(action))
 	if resource == "" && action == "" {
-		return nil
+		// no-op
+	} else {
+		if resource == "" {
+			resource = "*"
+		}
+		if action == "" {
+			action = "*"
+		}
+		caps = append(caps, newNormalizedCapability(resource, action, nil))
+	}
+
+	for _, cap := range additional {
+		normalized, ok := normalizeRequiredCapability(cap)
+		if !ok {
+			continue
+		}
+		caps = append(caps, normalized)
+	}
+	return dedupeCapabilities(caps)
+}
+
+func normalizeRequiredCapability(cap UcanCapability) (UcanCapability, bool) {
+	resource := cap.normalizedResource()
+	action := cap.normalizedAction()
+	if resource == "" && action == "" {
+		return UcanCapability{}, false
 	}
 	if resource == "" {
 		resource = "*"
@@ -144,7 +357,7 @@ func BuildRequiredUcanCaps(resource, action string) []UcanCapability {
 	if action == "" {
 		action = "*"
 	}
-	return []UcanCapability{{Resource: resource, Action: action}}
+	return newNormalizedCapability(resource, action, nil), true
 }
 
 func parseUcanCaps(token string) ([]UcanCapability, error) {
@@ -152,7 +365,7 @@ func parseUcanCaps(token string) ([]UcanCapability, error) {
 	if err != nil {
 		return nil, err
 	}
-	return payload.Cap, nil
+	return payload.Caps, nil
 }
 
 type appCapExtraction struct {
@@ -170,24 +383,20 @@ func extractAppCapsFromCaps(caps []UcanCapability, resourcePrefix string) appCap
 	invalid := make([]string, 0)
 	hasAppCaps := false
 	for _, cap := range caps {
-		resource := strings.TrimSpace(cap.Resource)
+		resource := strings.TrimSpace(cap.normalizedResource())
 		if !strings.HasPrefix(resource, prefix) {
 			continue
 		}
 		hasAppCaps = true
-		appID := strings.TrimSpace(strings.TrimPrefix(resource, prefix))
-		if appID == "" || strings.Contains(appID, "*") {
-			invalid = append(invalid, fmt.Sprintf("%s#%s", resource, strings.TrimSpace(cap.Action)))
-			continue
-		}
-		if !isValidAppID(appID) {
-			invalid = append(invalid, fmt.Sprintf("%s#%s", resource, strings.TrimSpace(cap.Action)))
+		appID, ok := extractAppIDFromResource(resource, prefix)
+		action := strings.ToLower(strings.TrimSpace(cap.normalizedAction()))
+		if !ok {
+			invalid = append(invalid, fmt.Sprintf("%s#%s", resource, action))
 			continue
 		}
 		if _, ok := actionSets[appID]; !ok {
 			actionSets[appID] = make(map[string]struct{})
 		}
-		action := strings.ToLower(strings.TrimSpace(cap.Action))
 		if action == "" {
 			continue
 		}
@@ -200,13 +409,54 @@ func extractAppCapsFromCaps(caps []UcanCapability, resourcePrefix string) appCap
 		for action := range actions {
 			list = append(list, action)
 		}
+		sort.Strings(list)
 		result[appID] = list
 	}
+	sort.Strings(invalid)
 	return appCapExtraction{
 		AppCaps:        result,
 		HasAppCaps:     hasAppCaps,
 		InvalidAppCaps: invalid,
 	}
+}
+
+func extractAppIDFromResource(resource, prefix string) (string, bool) {
+	if !strings.HasPrefix(resource, prefix) {
+		return "", false
+	}
+	remainder := strings.TrimSpace(strings.TrimPrefix(resource, prefix))
+	if remainder == "" {
+		return "", false
+	}
+
+	parts := strings.Split(remainder, ":")
+	switch len(parts) {
+	case 1:
+		appID := strings.TrimSpace(parts[0])
+		if !isValidAppResourceAppID(appID) {
+			return "", false
+		}
+		return appID, true
+	case 2:
+		scope := strings.ToLower(strings.TrimSpace(parts[0]))
+		appID := strings.TrimSpace(parts[1])
+		if scope != "all" {
+			return "", false
+		}
+		if !isValidAppResourceAppID(appID) {
+			return "", false
+		}
+		return appID, true
+	default:
+		return "", false
+	}
+}
+
+func isValidAppResourceAppID(appID string) bool {
+	if appID == "" || strings.Contains(appID, "*") {
+		return false
+	}
+	return isValidAppID(appID)
 }
 
 func isValidAppID(appID string) bool {
@@ -233,8 +483,8 @@ func formatCaps(caps []UcanCapability) string {
 	}
 	parts := make([]string, 0, len(caps))
 	for _, cap := range caps {
-		resource := strings.TrimSpace(cap.Resource)
-		action := strings.TrimSpace(cap.Action)
+		resource := strings.TrimSpace(cap.normalizedResource())
+		action := strings.TrimSpace(cap.normalizedAction())
 		if resource == "" {
 			resource = "*"
 		}
@@ -243,6 +493,7 @@ func formatCaps(caps []UcanCapability) string {
 		}
 		parts = append(parts, fmt.Sprintf("%s#%s", resource, action))
 	}
+	sort.Strings(parts)
 	return strings.Join(parts, ", ")
 }
 
@@ -351,14 +602,28 @@ func matchSinglePattern(pattern, value string) bool {
 }
 
 func capsAllow(available []UcanCapability, required []UcanCapability) bool {
+	if len(required) == 0 {
+		return true
+	}
 	if len(available) == 0 {
 		return false
 	}
 	for _, req := range required {
+		reqResource := strings.TrimSpace(req.normalizedResource())
+		reqAction := strings.TrimSpace(req.normalizedAction())
+		if reqResource == "" {
+			reqResource = "*"
+		}
+		if reqAction == "" {
+			reqAction = "*"
+		}
+
 		matched := false
 		for _, cap := range available {
-			resourceMatched := matchPattern(req.Resource, cap.Resource) || matchPattern(cap.Resource, req.Resource)
-			actionMatched := matchPattern(req.Action, cap.Action) || matchPattern(cap.Action, req.Action)
+			capResource := strings.TrimSpace(cap.normalizedResource())
+			capAction := strings.TrimSpace(cap.normalizedAction())
+			resourceMatched := matchPattern(reqResource, capResource) || matchPattern(capResource, reqResource)
+			actionMatched := matchPattern(reqAction, capAction) || matchPattern(capAction, reqAction)
 			if resourceMatched && actionMatched {
 				matched = true
 				break
@@ -426,6 +691,19 @@ func verifyRootProof(root ucanRootProof) (ucanStatement, string, error) {
 	if err != nil {
 		return ucanStatement{}, "", err
 	}
+	statementClaimsDeclared := len(statement.Cap) > 0 || len(statement.Att) > 0
+	statementCaps, err := extractCapabilities(statement.Cap, statement.Att)
+	if err != nil {
+		return ucanStatement{}, "", err
+	}
+	rootCaps, err := extractCapabilities(root.Cap, root.Att)
+	if err != nil {
+		return ucanStatement{}, "", err
+	}
+	effectiveCaps := statementCaps
+	if !statementClaimsDeclared {
+		effectiveCaps = rootCaps
+	}
 
 	aud := statement.Aud
 	if aud == "" {
@@ -435,21 +713,20 @@ func verifyRootProof(root ucanRootProof) (ucanStatement, string, error) {
 	if exp == 0 {
 		exp = normalizeEpochMillis(root.Exp)
 	}
-	if aud == "" || exp == 0 || (len(statement.Cap) == 0 && len(root.Cap) == 0) {
+	if aud == "" || exp == 0 || len(effectiveCaps) == 0 {
 		return ucanStatement{}, "", fmt.Errorf("invalid root claims")
 	}
 	if root.Aud != "" && root.Aud != aud {
 		return ucanStatement{}, "", fmt.Errorf("root audience mismatch")
 	}
 
-	cap := statement.Cap
-	if len(cap) == 0 {
-		cap = root.Cap
-	}
 	statement.Aud = aud
 	statement.Exp = exp
-	statement.Cap = cap
-	if statement.Nbf == nil && root.Nbf != nil {
+	statement.Caps = effectiveCaps
+	if statement.Nbf != nil {
+		nbf := normalizeEpochMillis(*statement.Nbf)
+		statement.Nbf = &nbf
+	} else if root.Nbf != nil {
 		nbf := normalizeEpochMillis(*root.Nbf)
 		statement.Nbf = &nbf
 	}
@@ -491,6 +768,11 @@ func decodeUcanToken(token string) (map[string]interface{}, ucanPayload, []byte,
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		return nil, ucanPayload{}, nil, "", err
 	}
+	caps, err := extractCapabilities(payload.Cap, payload.Att)
+	if err != nil {
+		return nil, ucanPayload{}, nil, "", err
+	}
+	payload.Caps = caps
 	return header, payload, sig, parts[0] + "." + parts[1], nil
 }
 
@@ -544,7 +826,7 @@ func verifyProofChain(currentDid string, required []UcanCapability, requiredExp 
 		if payload.Aud != currentDid {
 			return "", fmt.Errorf("UCAN audience mismatch")
 		}
-		if !capsAllow(payload.Cap, required) {
+		if !capsAllow(payload.Caps, required) {
 			return "", fmt.Errorf("UCAN capability denied")
 		}
 		if proofExp != 0 && requiredExp != 0 && proofExp < requiredExp {
@@ -554,7 +836,7 @@ func verifyProofChain(currentDid string, required []UcanCapability, requiredExp 
 		if len(nextProofs) == 0 && len(proofs) > 1 {
 			nextProofs = proofs[1:]
 		}
-		return verifyProofChain(payload.Iss, payload.Cap, proofExp, nextProofs)
+		return verifyProofChain(payload.Iss, payload.Caps, proofExp, nextProofs)
 	}
 
 	var root ucanRootProof
@@ -568,7 +850,7 @@ func verifyProofChain(currentDid string, required []UcanCapability, requiredExp 
 	if statement.Aud != currentDid {
 		return "", fmt.Errorf("root audience mismatch")
 	}
-	if !capsAllow(statement.Cap, required) {
+	if !capsAllow(statement.Caps, required) {
 		return "", fmt.Errorf("root capability denied")
 	}
 	if requiredExp != 0 && statement.Exp < requiredExp {

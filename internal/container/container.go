@@ -291,9 +291,25 @@ func (c *Container) initAuthenticators() error {
 	if ucanAudience == "" {
 		ucanAudience = fmt.Sprintf("did:web:localhost:%d", c.Config.Server.Port)
 	}
+	requiredCaps := make([]infraAuth.UcanCapability, 0, len(c.Config.Web3.UCAN.RequiredCapabilities))
+	for _, cfgCap := range c.Config.Web3.UCAN.RequiredCapabilities {
+		requiredCaps = append(requiredCaps, infraAuth.UcanCapability{
+			With:     cfgCap.With,
+			Can:      cfgCap.Can,
+			Resource: cfgCap.Resource,
+			Action:   cfgCap.Action,
+		})
+	}
+	requiredResource := c.Config.Web3.UCAN.RequiredResource
+	requiredAction := c.Config.Web3.UCAN.RequiredAction
+	if len(requiredCaps) > 0 {
+		requiredResource = ""
+		requiredAction = ""
+	}
 	ucanCaps := infraAuth.BuildRequiredUcanCaps(
-		c.Config.Web3.UCAN.RequiredResource,
-		c.Config.Web3.UCAN.RequiredAction,
+		requiredResource,
+		requiredAction,
+		requiredCaps,
 	)
 	ucanVerifier := infraAuth.NewUcanVerifier(
 		c.Config.Web3.UCAN.Enabled,

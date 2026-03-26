@@ -117,6 +117,61 @@ func TestResolveAppScope_InvalidAppCapsDenied(t *testing.T) {
 	}
 }
 
+func TestResolveAppScope_RequiredCapabilitiesEnableAppScope(t *testing.T) {
+	cfg := &config.Config{
+		Web3: config.Web3Config{
+			UCAN: config.UCANConfig{
+				RequiredCapabilities: []config.UCANRequiredCapability{
+					{With: "app:*", Can: "read"},
+				},
+			},
+		},
+	}
+
+	ctx := middleware.WithUcanContext(context.Background(), &middleware.UcanContext{
+		AppCaps:        map[string][]string{},
+		HasAppCaps:     false,
+		InvalidAppCaps: []string{},
+	})
+
+	_, err := resolveAppScope(ctx, cfg)
+	if !errors.Is(err, domainauth.ErrAppScopeRequired) {
+		t.Fatalf("expected ErrAppScopeRequired, got %v", err)
+	}
+}
+
+func TestResolveAppScope_RequiredCapabilitiesFilterActions(t *testing.T) {
+	cfg := &config.Config{
+		Web3: config.Web3Config{
+			UCAN: config.UCANConfig{
+				RequiredCapabilities: []config.UCANRequiredCapability{
+					{With: "app:*", Can: "read"},
+				},
+			},
+		},
+	}
+
+	ctx := middleware.WithUcanContext(context.Background(), &middleware.UcanContext{
+		AppCaps: map[string][]string{
+			"dapp.example.com": []string{"read", "write"},
+		},
+		HasAppCaps:     true,
+		InvalidAppCaps: []string{},
+	})
+
+	scope, err := resolveAppScope(ctx, cfg)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	set := scope.actions["dapp.example.com"]
+	if !set.Read {
+		t.Fatalf("expected read allowed")
+	}
+	if set.Write || set.Create || set.Update || set.Delete || set.Move || set.Copy {
+		t.Fatalf("expected write-like actions filtered out, got %+v", set)
+	}
+}
+
 func TestWebDAVCheckAppScope_MatchingAppAllowedAndCrossAppDenied(t *testing.T) {
 	svc := &WebDAVService{
 		config: &config.Config{
