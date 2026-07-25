@@ -24,7 +24,7 @@ type GroupRepository interface {
 	UpdateMember(ctx context.Context, member *group.Member) error
 	UpdateMemberNameByWallet(ctx context.Context, walletAddress, memberID, name string) error
 	SetMemberAlias(ctx context.Context, ownerUserID, memberID, alias string) error
-	UpdateMemberStatusByWallet(ctx context.Context, walletAddress, memberID, status string) error
+	UpdateMemberStatusByWallet(ctx context.Context, walletAddress, memberID, status, name string) error
 	DeleteMember(ctx context.Context, userID, memberID string) error
 	DeleteMemberByWallet(ctx context.Context, walletAddress, memberID string) error
 }
@@ -421,9 +421,14 @@ func (r *PostgresGroupRepository) SetMemberAlias(ctx context.Context, ownerUserI
 	return nil
 }
 
-func (r *PostgresGroupRepository) UpdateMemberStatusByWallet(ctx context.Context, walletAddress, memberID, status string) error {
-	query := `UPDATE group_members SET status = $1 WHERE id = $2 AND LOWER(wallet_address) = LOWER($3) AND status = $4`
-	result, err := r.db.ExecContext(ctx, query, group.NormalizeMemberStatus(status), memberID, strings.TrimSpace(walletAddress), group.MemberStatusPending)
+func (r *PostgresGroupRepository) UpdateMemberStatusByWallet(ctx context.Context, walletAddress, memberID, status, name string) error {
+	query := `
+		UPDATE group_members
+		SET status = $1,
+			name = CASE WHEN TRIM($5) <> '' THEN TRIM($5) ELSE name END
+		WHERE id = $2 AND LOWER(wallet_address) = LOWER($3) AND status = $4
+	`
+	result, err := r.db.ExecContext(ctx, query, group.NormalizeMemberStatus(status), memberID, strings.TrimSpace(walletAddress), group.MemberStatusPending, strings.TrimSpace(name))
 	if err != nil {
 		return fmt.Errorf("failed to update member status: %w", err)
 	}

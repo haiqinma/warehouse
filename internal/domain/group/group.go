@@ -66,9 +66,6 @@ func NewMember(userID, groupID, name, walletAddress string) (*Member, error) {
 	if walletAddress == "" {
 		return nil, errors.New("wallet address is required")
 	}
-	if name == "" {
-		name = strings.ToLower(walletAddress)
-	}
 	now := time.Now()
 	return &Member{
 		ID:            uuid.NewString(),

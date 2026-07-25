@@ -41,7 +41,7 @@ func TestGroupServiceListGroupsRequiresApprovalBeforeTargetCanSeeGroup(t *testin
 	repo := newFakeGroupRepository()
 	svc := NewGroupService(repo, nil)
 	owner := &user.User{ID: "owner-user", WalletAddress: "0x1111111111111111111111111111111111111111"}
-	invited := &user.User{ID: "invited-user", WalletAddress: "0x2222222222222222222222222222222222222222"}
+	invited := &user.User{ID: "invited-user", Username: "Night Member", WalletAddress: "0x2222222222222222222222222222222222222222"}
 
 	grp, err := svc.CreateGroup(ctx, owner, "team")
 	if err != nil {
@@ -60,6 +60,9 @@ func TestGroupServiceListGroupsRequiresApprovalBeforeTargetCanSeeGroup(t *testin
 	if err != nil {
 		t.Fatalf("CreateMember() error = %v", err)
 	}
+	if member.Name != "" {
+		t.Fatalf("pending member name = %q, want empty", member.Name)
+	}
 	groups, err = svc.ListGroups(ctx, invited)
 	if err != nil {
 		t.Fatalf("ListGroups() after invite error = %v", err)
@@ -68,8 +71,11 @@ func TestGroupServiceListGroupsRequiresApprovalBeforeTargetCanSeeGroup(t *testin
 		t.Fatalf("ListGroups() after pending invite returned %d groups, want 0", len(groups))
 	}
 
-	if err := svc.ApproveMember(ctx, invited, member.ID); err != nil {
+	if err := svc.ApproveMember(ctx, invited, member.ID, "Member Name"); err != nil {
 		t.Fatalf("ApproveMember() error = %v", err)
+	}
+	if got := repo.members[member.ID].Name; got != "Member Name" {
+		t.Fatalf("approved member name = %q, want Member Name", got)
 	}
 	groups, err = svc.ListGroups(ctx, invited)
 	if err != nil {
@@ -77,6 +83,30 @@ func TestGroupServiceListGroupsRequiresApprovalBeforeTargetCanSeeGroup(t *testin
 	}
 	if len(groups) != 1 || groups[0].ID != grp.ID {
 		t.Fatalf("ListGroups() after approval = %#v, want group %s", groups, grp.ID)
+	}
+}
+
+func TestGroupServiceApproveMemberRequiresDisplayName(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeGroupRepository()
+	svc := NewGroupService(repo, nil)
+	owner := &user.User{ID: "owner-user", WalletAddress: "0x1111111111111111111111111111111111111111"}
+	invited := &user.User{ID: "invited-user", WalletAddress: "0x2222222222222222222222222222222222222222"}
+
+	grp, err := svc.CreateGroup(ctx, owner, "team")
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	member, err := svc.CreateMember(ctx, owner, CreateMemberInput{Target: invited.WalletAddress, GroupID: grp.ID})
+	if err != nil {
+		t.Fatalf("CreateMember() error = %v", err)
+	}
+
+	if err := svc.ApproveMember(ctx, invited, member.ID, ""); err == nil || err.Error() != "member name is required" {
+		t.Fatalf("ApproveMember() error = %v, want member name is required", err)
+	}
+	if got := repo.members[member.ID].Status; got != group.MemberStatusPending {
+		t.Fatalf("member status = %q, want pending", got)
 	}
 }
 
@@ -138,8 +168,8 @@ func TestGroupServiceCreateMemberResolvesUsernameAndStoresAlias(t *testing.T) {
 	if member.WalletAddress != target.WalletAddress {
 		t.Fatalf("member wallet = %q, want %q", member.WalletAddress, target.WalletAddress)
 	}
-	if member.Name != target.WalletAddress {
-		t.Fatalf("member name = %q, want wallet fallback", member.Name)
+	if member.Name != "" {
+		t.Fatalf("member name = %q, want empty", member.Name)
 	}
 	if member.Alias != "Partner" {
 		t.Fatalf("member alias = %q, want Partner", member.Alias)
@@ -219,14 +249,14 @@ func TestGroupServiceMemberInviteRequiresTargetConfirmation(t *testing.T) {
 		t.Fatalf("CreateMember() status = %q, want %q", member.Status, group.MemberStatusPending)
 	}
 
-	if err := svc.ApproveMember(ctx, other, member.ID); err != group.ErrMemberNotFound {
+	if err := svc.ApproveMember(ctx, other, member.ID, "Member Name"); err != group.ErrMemberNotFound {
 		t.Fatalf("ApproveMember() by unrelated wallet error = %v, want %v", err, group.ErrMemberNotFound)
 	}
 	if got := repo.members[member.ID].Status; got != group.MemberStatusPending {
 		t.Fatalf("status after unrelated approve = %q, want pending", got)
 	}
 
-	if err := svc.ApproveMember(ctx, invited, member.ID); err != nil {
+	if err := svc.ApproveMember(ctx, invited, member.ID, "Member Name"); err != nil {
 		t.Fatalf("ApproveMember() by invited wallet error = %v", err)
 	}
 	if got := repo.members[member.ID].Status; got != group.MemberStatusActive {
@@ -250,7 +280,7 @@ func TestGroupServiceActiveMemberInviteRequiresTargetConfirmation(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CreateMember(owner invite) error = %v", err)
 	}
-	if err := svc.ApproveMember(ctx, memberUser, member.ID); err != nil {
+	if err := svc.ApproveMember(ctx, memberUser, member.ID, "Member Name"); err != nil {
 		t.Fatalf("ApproveMember(member) error = %v", err)
 	}
 
@@ -261,10 +291,10 @@ func TestGroupServiceActiveMemberInviteRequiresTargetConfirmation(t *testing.T) 
 	if invite.Status != group.MemberStatusPending {
 		t.Fatalf("member invite status = %q, want %q", invite.Status, group.MemberStatusPending)
 	}
-	if err := svc.ApproveMember(ctx, owner, invite.ID); err != group.ErrMemberNotFound {
+	if err := svc.ApproveMember(ctx, owner, invite.ID, "Member Name"); err != group.ErrMemberNotFound {
 		t.Fatalf("ApproveMember(owner) error = %v, want %v", err, group.ErrMemberNotFound)
 	}
-	if err := svc.ApproveMember(ctx, invited, invite.ID); err != nil {
+	if err := svc.ApproveMember(ctx, invited, invite.ID, "Member Name"); err != nil {
 		t.Fatalf("ApproveMember(invited) error = %v", err)
 	}
 	if got := repo.members[invite.ID].Status; got != group.MemberStatusActive {
@@ -288,7 +318,7 @@ func TestGroupServiceRejectActiveMemberInviteRequiresTargetWallet(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CreateMember(owner invite) error = %v", err)
 	}
-	if err := svc.ApproveMember(ctx, memberUser, member.ID); err != nil {
+	if err := svc.ApproveMember(ctx, memberUser, member.ID, "Member Name"); err != nil {
 		t.Fatalf("ApproveMember(member) error = %v", err)
 	}
 	invite, err := svc.CreateMember(ctx, memberUser, CreateMemberInput{Target: invited.WalletAddress, GroupID: grp.ID})
@@ -360,14 +390,14 @@ func TestGroupServiceUpdateMemberNameRequiresOwnWallet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateMember() error = %v", err)
 	}
-	if err := svc.ApproveMember(ctx, invited, member.ID); err != nil {
+	if err := svc.ApproveMember(ctx, invited, member.ID, "Member Name"); err != nil {
 		t.Fatalf("ApproveMember() error = %v", err)
 	}
 	groupMember, err := svc.CreateMember(ctx, owner, CreateMemberInput{Target: memberUser.WalletAddress, GroupID: grp.ID})
 	if err != nil {
 		t.Fatalf("CreateMember(member) error = %v", err)
 	}
-	if err := svc.ApproveMember(ctx, memberUser, groupMember.ID); err != nil {
+	if err := svc.ApproveMember(ctx, memberUser, groupMember.ID, "Member Name"); err != nil {
 		t.Fatalf("ApproveMember(member) error = %v", err)
 	}
 
@@ -401,7 +431,7 @@ func TestGroupServiceMemberAliasIsViewerPrivate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateMember() error = %v", err)
 	}
-	if err := svc.ApproveMember(ctx, invited, member.ID); err != nil {
+	if err := svc.ApproveMember(ctx, invited, member.ID, "Member Name"); err != nil {
 		t.Fatalf("ApproveMember() error = %v", err)
 	}
 
@@ -595,12 +625,15 @@ func (r *fakeGroupRepository) SetMemberAlias(_ context.Context, ownerUserID, mem
 	return nil
 }
 
-func (r *fakeGroupRepository) UpdateMemberStatusByWallet(_ context.Context, walletAddress, memberID, status string) error {
+func (r *fakeGroupRepository) UpdateMemberStatusByWallet(_ context.Context, walletAddress, memberID, status, name string) error {
 	member, ok := r.members[memberID]
 	if !ok || member.Status != group.MemberStatusPending || !strings.EqualFold(member.WalletAddress, walletAddress) {
 		return group.ErrMemberNotFound
 	}
 	member.Status = group.NormalizeMemberStatus(status)
+	if name = strings.TrimSpace(name); name != "" {
+		member.Name = name
+	}
 	return nil
 }
 

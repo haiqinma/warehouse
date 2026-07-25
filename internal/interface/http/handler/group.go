@@ -406,7 +406,8 @@ func (h *GroupHandler) HandleMemberApprove(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var req struct {
-		ID string `json:"id"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -416,7 +417,7 @@ func (h *GroupHandler) HandleMemberApprove(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "id is required", http.StatusBadRequest)
 		return
 	}
-	if err := h.service.ApproveMember(r.Context(), u, req.ID); err != nil {
+	if err := h.service.ApproveMember(r.Context(), u, req.ID, req.Name); err != nil {
 		if err == group.ErrMemberNotFound {
 			http.Error(w, "Member not found", http.StatusNotFound)
 			return

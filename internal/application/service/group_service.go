@@ -43,10 +43,7 @@ func (s *GroupService) CreateGroup(ctx context.Context, u *user.User, name strin
 	if err != nil {
 		return nil, err
 	}
-	ownerMemberName := strings.TrimSpace(u.Username)
-	if ownerMemberName == "" {
-		ownerMemberName = strings.TrimSpace(u.WalletAddress)
-	}
+	ownerMemberName := defaultMemberName(u)
 	var ownerMember *group.Member
 	if strings.TrimSpace(u.WalletAddress) != "" {
 		ownerMember, err = group.NewMember(u.ID, grp.ID, ownerMemberName, u.WalletAddress)
@@ -94,12 +91,9 @@ func (s *GroupService) CreateMember(ctx context.Context, u *user.User, input Cre
 	if err != nil {
 		return nil, err
 	}
-	memberName := wallet
+	memberName := ""
 	if strings.EqualFold(strings.TrimSpace(u.WalletAddress), wallet) {
-		memberName = strings.TrimSpace(u.Username)
-		if memberName == "" {
-			memberName = wallet
-		}
+		memberName = defaultMemberName(u)
 	}
 	member, err := group.NewMember(targetGroup.UserID, groupID, memberName, wallet)
 	if err != nil {
@@ -253,14 +247,28 @@ func (s *GroupService) DeleteMember(ctx context.Context, u *user.User, id string
 	return s.repo.DeleteMember(ctx, u.ID, id)
 }
 
-func (s *GroupService) ApproveMember(ctx context.Context, u *user.User, id string) error {
-	if err := s.repo.UpdateMemberStatusByWallet(ctx, u.WalletAddress, id, group.MemberStatusActive); err != nil {
+func (s *GroupService) ApproveMember(ctx context.Context, u *user.User, id, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = defaultMemberName(u)
+	}
+	if name == "" {
+		return fmt.Errorf("member name is required")
+	}
+	if err := s.repo.UpdateMemberStatusByWallet(ctx, u.WalletAddress, id, group.MemberStatusActive, name); err != nil {
 		return err
 	}
 	if s.notification != nil {
 		s.notification.DismissGroupInvite(ctx, u, id)
 	}
 	return nil
+}
+
+func defaultMemberName(u *user.User) string {
+	if u == nil {
+		return ""
+	}
+	return strings.TrimSpace(u.Username)
 }
 
 func (s *GroupService) RejectMember(ctx context.Context, u *user.User, id string) error {

@@ -602,10 +602,10 @@ export const groupApi = {
       body: payload
     })
   },
-  approveMember(id: string) {
+  approveMember(id: string, name = "") {
     return request('/api/v1/public/webdav/group/members/approve', {
       method: 'POST',
-      body: { id }
+      body: { id, name }
     })
   },
   rejectMember(id: string) {

@@ -1,8 +1,9 @@
 <script lang="ts" setup>
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { Bell, Check, Close, Notebook, SwitchButton, Wallet } from '@element-plus/icons-vue'
+import { ElMessageBox } from 'element-plus'
 import { storeToRefs } from 'pinia'
-import { groupApi, notificationApi, type AdminNotificationCreatePayload, type NotificationItem, type NotificationPreferenceItem } from '@/api'
+import { groupApi, notificationApi, userApi, type AdminNotificationCreatePayload, type NotificationItem, type NotificationPreferenceItem } from '@/api'
 import { AUTH_CHANGED_EVENT, isLoggedIn, getCurrentAccount, logout, loginWithWallet, focusPendingWalletApproval, getWalletName, watchWalletAccounts, watchWalletProvider } from '@/plugins/auth'
 import { useUploadTaskStore } from '@/stores/uploadTaskStore'
 import UploadTaskListView from '@/views/home/components/UploadTaskListView.vue'
@@ -304,14 +305,72 @@ function isGroupInviteNotification(item: NotificationItem): boolean {
   return item.type === 'group_invite' && Boolean(groupInviteMemberId(item))
 }
 
+function parseGroupNameFromInvite(item: NotificationItem): string {
+  const matched = item.content.match(/「(.+?)」/)
+  return matched?.[1]?.trim() || '-'
+}
+
+function escapeHTML(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+async function promptGroupInviteName(item: NotificationItem, memberId: string): Promise<string> {
+  const [membersResult, groupsResult, userInfo] = await Promise.all([
+    groupApi.listMembers(),
+    groupApi.listGroups().catch(() => ({ items: [] })),
+    userApi.getInfo().catch(() => ({ username: '' }))
+  ])
+  const member = (membersResult.items || []).find(current => current.id === memberId)
+  const groupName = (groupsResult.items || []).find(group => group.id === member?.groupId)?.name || parseGroupNameFromInvite(item)
+  const walletAddress = member?.walletAddress || getCurrentAccount() || '-'
+  const defaultName = String(userInfo.username || '').trim()
+
+  const { value } = await ElMessageBox.prompt(
+    `<div class="group-invite-confirm">` +
+      `<div><span>钱包地址</span><strong>${escapeHTML(walletAddress)}</strong></div>` +
+      `<div><span>分组名称</span><strong>${escapeHTML(groupName)}</strong></div>` +
+      `<div><span>用户在分组中的名称</span></div>` +
+    `</div>`,
+    '确认加入分组',
+    {
+      confirmButtonText: '确认加入',
+      cancelButtonText: '取消',
+      inputValue: defaultName,
+      inputPlaceholder: '请输入你在分组中展示的名称',
+      inputPattern: /\S+/,
+      inputErrorMessage: '请输入名称',
+      closeOnClickModal: false,
+      dangerouslyUseHTMLString: true
+    }
+  )
+  return String(value || '').trim()
+}
+
 async function respondGroupInvite(item: NotificationItem, accepted: boolean, event?: MouseEvent) {
   event?.stopPropagation()
+  event?.preventDefault()
   const memberId = groupInviteMemberId(item)
   if (!memberId) return
+
+  let memberName = ''
+  try {
+    if (accepted) {
+      memberName = await promptGroupInviteName(item, memberId)
+      if (!memberName) return
+    }
+  } catch {
+    return
+  }
+
   notificationActionLoading.value = { ...notificationActionLoading.value, [item.id]: true }
   try {
     if (accepted) {
-      await groupApi.approveMember(memberId)
+      await groupApi.approveMember(memberId, memberName)
     } else {
       await groupApi.rejectMember(memberId)
     }
@@ -887,6 +946,32 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   margin-top: 4px;
+}
+
+:global(.group-invite-confirm) {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: #606266;
+  font-size: 13px;
+}
+
+:global(.group-invite-confirm div) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+:global(.group-invite-confirm span) {
+  color: #909399;
+  font-size: 12px;
+}
+
+:global(.group-invite-confirm strong) {
+  color: #303133;
+  font-weight: 500;
+  word-break: break-all;
 }
 
 .notification-preferences {

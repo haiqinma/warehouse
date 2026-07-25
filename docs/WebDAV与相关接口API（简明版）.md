@@ -1209,8 +1209,10 @@ S3 凭证用于 AWS Signature V4 认证，不能用于 WebDAV Basic。S3 客户�
 字段说明：
 
 - `name`：凭证名称，同一用户范围内必须唯一。
-- `rootPath`：授权范围，必须位于 `/personal`、`/apps` 或 `/services` 下；为空时默认 `/personal`。
+- `rootPath`：Warehouse 的服务端授权范围，必须位于 `/personal`、`/apps` 或 `/services` 下；为空时默认 `/personal`。它不是 S3 标准凭证字段，也不需要由第三方 S3 客户端传递。
 - `permissions`：支持 `read/create/update/delete`。
+
+`rootPath` 会被解析为标准 S3 的 bucket 和 Object Key prefix。例如 `/personal/backup` 表示 bucket 是 `personal`、允许访问的 key prefix 是 `backup/`。客户端仍然使用标准 Endpoint、Region、Access Key ID、Secret Access Key、bucket 和 Object Key 发起 Signature V4 请求；Warehouse 在服务端执行 prefix 权限检查。
 
 响应示例：
 

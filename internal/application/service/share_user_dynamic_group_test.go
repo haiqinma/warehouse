@@ -42,7 +42,7 @@ func TestCreateByGroupsStoresDynamicGroupAudience(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
-	if err := groupSvc.ApproveMember(ctx, target, member.ID); err != nil {
+	if err := groupSvc.ApproveMember(ctx, target, member.ID, "Member Name"); err != nil {
 		t.Fatalf("ApproveMember: %v", err)
 	}
 
@@ -95,7 +95,7 @@ func TestResolveForTargetUsesCurrentGroupMembershipForHistoricalGroupShare(t *te
 	if err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
-	if err := groupSvc.ApproveMember(ctx, target, member.ID); err != nil {
+	if err := groupSvc.ApproveMember(ctx, target, member.ID, "Member Name"); err != nil {
 		t.Fatalf("ApproveMember: %v", err)
 	}
 
