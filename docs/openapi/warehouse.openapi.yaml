@@ -1,0 +1,2121 @@
+openapi: 3.1.0
+info:
+  title: Warehouse HTTP API
+  version: 1.0.0
+  summary: Warehouse JSON HTTP API contract
+  description: |
+    Warehouse 对外 JSON HTTP API 的正式契约。
+
+    WebDAV (`/dav/*`) 和独立 S3 Endpoint 是协议适配层，不在本 OpenAPI
+    规范中逐操作重复定义。WebDAV 请参阅用户使用指南，S3 请参阅
+    `docs/S3现状与演进.md`。
+servers:
+  - url: https://warehouse.tidukongjian.com
+    description: Production
+  - url: http://localhost:8080
+    description: Local development
+tags:
+  - name: Health
+    description: 健康检查
+  - name: Authentication
+    description: 钱包、密码和刷新令牌认证
+  - name: Assets
+    description: 逻辑资产空间
+  - name: User
+    description: 当前用户信息和配额
+  - name: WebDAV credentials
+    description: WebDAV Basic Auth 访问密钥
+  - name: S3 credentials
+    description: AWS Signature V4 凭证
+  - name: Notifications
+    description: 用户通知、偏好和实时未读数
+  - name: Groups
+    description: 分组、成员和邀请处理
+  - name: Recycle
+    description: 回收站列表、恢复和永久删除
+  - name: Admin notifications
+    description: 需要管理员钱包权限的公告和管理通知
+  - name: Admin users
+    description: 需要管理员钱包权限的用户管理
+  - name: Public shares
+    description: 公开链接分享
+  - name: Directed shares
+    description: 按钱包、分组或全体用户的定向分享
+  - name: Upload sessions
+    description: 可恢复分片上传会话
+
+paths:
+  /api/v1/public/health/heartbeat:
+    get:
+      tags: [Health]
+      operationId: getHeartbeat
+      summary: 获取进程存活状态
+      security: []
+      responses:
+        "200":
+          description: 进程存活
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /api/v1/public/health/readiness:
+    get:
+      tags: [Health]
+      operationId: getReadiness
+      summary: 检查数据库和存储等依赖是否就绪
+      security: []
+      responses:
+        "200":
+          description: 服务已就绪
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+        "503":
+          description: 服务未就绪
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+
+  /api/v1/public/auth/challenge:
+    get:
+      tags: [Authentication]
+      operationId: getWalletChallenge
+      summary: 获取钱包签名挑战
+      security: []
+      parameters:
+        - name: address
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/WalletAddress"
+      responses:
+        "200":
+          description: 挑战创建成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChallengeEnvelope"
+        "400":
+          $ref: "#/components/responses/SDKBadRequest"
+        "404":
+          $ref: "#/components/responses/SDKNotFound"
+    post:
+      tags: [Authentication]
+      operationId: createWalletChallenge
+      summary: 使用 JSON 请求获取钱包签名挑战
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChallengeRequest"
+      responses:
+        "200":
+          description: 挑战创建成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChallengeEnvelope"
+        "400":
+          $ref: "#/components/responses/SDKBadRequest"
+        "404":
+          $ref: "#/components/responses/SDKNotFound"
+  /api/v1/public/auth/verify:
+    post:
+      tags: [Authentication]
+      operationId: verifyWalletSignature
+      summary: 验证钱包签名并登录
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyWalletRequest"
+      responses:
+        "200":
+          description: 登录成功，同时设置 HttpOnly refresh token Cookie
+          headers:
+            Set-Cookie:
+              schema: {type: string}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokenEnvelope"
+        "400":
+          $ref: "#/components/responses/SDKBadRequest"
+        "401":
+          $ref: "#/components/responses/SDKUnauthorized"
+  /api/v1/public/auth/password/login:
+    post:
+      tags: [Authentication]
+      operationId: loginWithPassword
+      summary: 使用用户名和密码登录
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordLoginRequest"
+      responses:
+        "200":
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokenEnvelope"
+        "400":
+          $ref: "#/components/responses/SDKBadRequest"
+        "401":
+          $ref: "#/components/responses/SDKUnauthorized"
+  /api/v1/public/auth/refresh:
+    post:
+      tags: [Authentication]
+      operationId: refreshAccessToken
+      summary: 使用 refresh token Cookie 刷新令牌
+      security:
+        - refreshCookie: []
+      responses:
+        "200":
+          description: 刷新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokenEnvelope"
+        "401":
+          $ref: "#/components/responses/SDKUnauthorized"
+  /api/v1/public/auth/logout:
+    post:
+      tags: [Authentication]
+      operationId: logout
+      summary: 退出登录并清除 refresh token Cookie
+      security: []
+      responses:
+        "200":
+          description: 退出成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogoutEnvelope"
+  /api/v1/public/auth/email/code:
+    post:
+      tags: [Authentication]
+      operationId: sendEmailLoginCode
+      summary: 发送邮箱登录验证码
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: {type: string, format: email}
+      responses:
+        "200":
+          description: 发送成功
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EmailCodeEnvelope"}
+        "400": {$ref: "#/components/responses/SDKBadRequest"}
+        "403": {$ref: "#/components/responses/SDKUnauthorized"}
+        "429":
+          description: 发送过于频繁
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SDKError"}
+  /api/v1/public/auth/email/login:
+    post:
+      tags: [Authentication]
+      operationId: loginWithEmailCode
+      summary: 使用邮箱验证码登录
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code]
+              properties:
+                email: {type: string, format: email}
+                code: {type: string, minLength: 1}
+      responses:
+        "200":
+          description: 登录成功
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EmailAuthTokenEnvelope"}
+        "400": {$ref: "#/components/responses/SDKBadRequest"}
+        "401": {$ref: "#/components/responses/SDKUnauthorized"}
+        "403": {$ref: "#/components/responses/SDKUnauthorized"}
+        "404": {$ref: "#/components/responses/SDKNotFound"}
+
+  /api/v1/public/assets/spaces:
+    get:
+      tags: [Assets]
+      operationId: listAssetSpaces
+      summary: 获取当前用户的逻辑资产空间
+      responses:
+        "200":
+          description: 资产空间列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetSpacesEnvelope"
+        "401":
+          $ref: "#/components/responses/SDKUnauthorized"
+  /api/v1/public/webdav/quota:
+    get:
+      tags: [User]
+      operationId: getCurrentUserQuota
+      summary: 获取当前用户存储配额
+      responses:
+        "200":
+          description: 配额信息
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quota"
+        "401":
+          $ref: "#/components/responses/LegacyError"
+  /api/v1/public/webdav/user/info:
+    get:
+      tags: [User]
+      operationId: getCurrentUser
+      summary: 获取当前用户信息
+      responses:
+        "200":
+          description: 用户信息
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/LegacyError"
+  /api/v1/public/webdav/user/update:
+    post:
+      tags: [User]
+      operationId: updateCurrentUsername
+      summary: 修改当前用户名
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username: {type: string, minLength: 1}
+      responses:
+        "200":
+          description: 修改成功
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        "400":
+          $ref: "#/components/responses/LegacyError"
+  /api/v1/public/webdav/user/password:
+    post:
+      tags: [User]
+      operationId: updateCurrentUserPassword
+      summary: 设置或修改当前用户密码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: {type: string, format: password, minLength: 1}
+      responses:
+        "200":
+          description: 修改成功
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        "400":
+          $ref: "#/components/responses/LegacyError"
+
+  /api/v1/public/webdav/access-keys/list:
+    get:
+      tags: [WebDAV credentials]
+      operationId: listWebDAVAccessKeys
+      summary: 列出 WebDAV 访问密钥
+      responses:
+        "200":
+          description: 密钥列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/WebDAVAccessKey"}
+        "401":
+          $ref: "#/components/responses/PlainTextError"
+  /api/v1/public/webdav/access-keys/create:
+    post:
+      tags: [WebDAV credentials]
+      operationId: createWebDAVAccessKey
+      summary: 创建 WebDAV 访问密钥
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWebDAVAccessKeyRequest"
+      responses:
+        "200":
+          description: 创建成功，keySecret 只在本次响应中返回
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedWebDAVAccessKey"
+        "400":
+          $ref: "#/components/responses/PlainTextError"
+        "409":
+          $ref: "#/components/responses/PlainTextError"
+  /api/v1/public/webdav/access-keys/bind:
+    post:
+      tags: [WebDAV credentials]
+      operationId: bindWebDAVAccessKeyPath
+      summary: 将 WebDAV 密钥绑定到资产路径
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, path]
+              properties:
+                id: {type: string, format: uuid}
+                path: {type: string, example: /personal/documents}
+      responses:
+        "200":
+          $ref: "#/components/responses/MessageResponse"
+        "400":
+          $ref: "#/components/responses/PlainTextError"
+        "404":
+          $ref: "#/components/responses/PlainTextError"
+  /api/v1/public/webdav/access-keys/revoke:
+    post:
+      tags: [WebDAV credentials]
+      operationId: revokeWebDAVAccessKey
+      summary: 撤销 WebDAV 访问密钥
+      requestBody:
+        $ref: "#/components/requestBodies/IDRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/MessageResponse"
+        "400":
+          $ref: "#/components/responses/PlainTextError"
+        "404":
+          $ref: "#/components/responses/PlainTextError"
+  /api/v1/public/webdav/access-keys/delete:
+    post:
+      tags: [WebDAV credentials]
+      operationId: deleteWebDAVAccessKey
+      summary: 删除已撤销的 WebDAV 访问密钥
+      requestBody:
+        $ref: "#/components/requestBodies/IDRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/MessageResponse"
+        "400":
+          $ref: "#/components/responses/PlainTextError"
+        "404":
+          $ref: "#/components/responses/PlainTextError"
+
+  /api/v1/public/s3/credentials/list:
+    get:
+      tags: [S3 credentials]
+      operationId: listS3Credentials
+      summary: 列出 S3 凭证
+      responses:
+        "200":
+          description: S3 凭证列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/S3Credential"}
+        "401":
+          $ref: "#/components/responses/PlainTextError"
+  /api/v1/public/s3/credentials/create:
+    post:
+      tags: [S3 credentials]
+      operationId: createS3Credential
+      summary: 创建 S3 凭证
+      description: |
+        rootPath 是 Warehouse 服务端权限范围，不是 S3 标准凭证字段。
+        `/personal/backup` 表示 `personal` bucket 下的 `backup/` Object Key prefix。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateS3CredentialRequest"
+      responses:
+        "200":
+          description: 创建成功，secret 只在本次响应中返回
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedS3Credential"
+        "400":
+          $ref: "#/components/responses/PlainTextError"
+        "401":
+          $ref: "#/components/responses/PlainTextError"
+  /api/v1/public/s3/credentials/revoke:
+    post:
+      tags: [S3 credentials]
+      operationId: revokeS3Credential
+      summary: 撤销 S3 凭证
+      requestBody:
+        $ref: "#/components/requestBodies/IDRequest"
+      responses:
+        "200":
+          description: 撤销成功，当前实现返回空响应体
+        "400":
+          $ref: "#/components/responses/PlainTextError"
+        "404":
+          $ref: "#/components/responses/PlainTextError"
+  /api/v1/public/s3/credentials/delete:
+    post:
+      tags: [S3 credentials]
+      operationId: deleteS3Credential
+      summary: 删除已撤销的 S3 凭证
+      requestBody:
+        $ref: "#/components/requestBodies/IDRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/MessageResponse"
+        "400":
+          $ref: "#/components/responses/PlainTextError"
+        "404":
+          $ref: "#/components/responses/PlainTextError"
+
+  /api/v1/public/notifications/list:
+    get:
+      tags: [Notifications]
+      operationId: listNotifications
+      summary: 列出当前用户通知
+      parameters:
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, default: 20}
+      responses:
+        "200":
+          description: 通知列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, canAnnounce]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/Notification"}
+                  canAnnounce: {type: boolean}
+        "401": {$ref: "#/components/responses/LegacyError"}
+  /api/v1/public/notifications/unread-count:
+    get:
+      tags: [Notifications]
+      operationId: getNotificationUnreadCount
+      summary: 获取未读通知数
+      responses:
+        "200":
+          description: 未读数
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [count]
+                properties:
+                  count: {type: integer, minimum: 0}
+        "401": {$ref: "#/components/responses/LegacyError"}
+  /api/v1/public/notifications/read:
+    post:
+      tags: [Notifications]
+      operationId: markNotificationsRead
+      summary: 批量标记通知已读
+      requestBody: {$ref: "#/components/requestBodies/IDsRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/MessageResponse"}
+        "400": {$ref: "#/components/responses/LegacyError"}
+  /api/v1/public/notifications/read-all:
+    post:
+      tags: [Notifications]
+      operationId: markAllNotificationsRead
+      summary: 标记所有通知已读
+      responses:
+        "200": {$ref: "#/components/responses/MessageResponse"}
+        "401": {$ref: "#/components/responses/LegacyError"}
+  /api/v1/public/notifications/preferences:
+    get:
+      tags: [Notifications]
+      operationId: listNotificationPreferences
+      summary: 获取通知偏好
+      responses:
+        "200":
+          description: 偏好列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/NotificationPreference"}
+        "401": {$ref: "#/components/responses/LegacyError"}
+    post:
+      tags: [Notifications]
+      operationId: setNotificationPreference
+      summary: 设置通知偏好
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NotificationPreference"}
+      responses:
+        "200": {$ref: "#/components/responses/MessageResponse"}
+        "400": {$ref: "#/components/responses/LegacyError"}
+  /api/v1/public/notifications/stream:
+    get:
+      tags: [Notifications]
+      operationId: streamNotificationUnreadCount
+      summary: 订阅未读数 SSE 流
+      description: 立即发送一次 `unread` 事件，之后约每 30 秒发送。
+      responses:
+        "200":
+          description: Server-Sent Events 流
+          content:
+            text/event-stream:
+              schema: {type: string}
+              example: "event: unread\ndata: {\"count\":2}\n\n"
+        "401": {$ref: "#/components/responses/LegacyError"}
+
+  /api/v1/public/webdav/group/groups:
+    get:
+      tags: [Groups]
+      operationId: listGroups
+      summary: 列出当前用户可见分组
+      responses:
+        "200":
+          description: 分组列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/Group"}
+        "401": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/webdav/group/groups/create:
+    post:
+      tags: [Groups]
+      operationId: createGroup
+      summary: 创建分组
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string, minLength: 1}
+      responses:
+        "200":
+          description: 创建的分组
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Group"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "409": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/webdav/group/groups/update:
+    put:
+      tags: [Groups]
+      operationId: updateGroup
+      summary: 修改分组名称
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, name]
+              properties:
+                id: {type: string, format: uuid}
+                name: {type: string, minLength: 1}
+      responses:
+        "200": {description: 修改成功}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+        "409": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/webdav/group/groups/delete:
+    delete:
+      tags: [Groups]
+      operationId: deleteGroup
+      summary: 删除分组
+      requestBody: {$ref: "#/components/requestBodies/IDRequest"}
+      responses:
+        "200": {description: 删除成功}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/webdav/group/members:
+    get:
+      tags: [Groups]
+      operationId: listGroupMembers
+      summary: 列出可见成员和待确认邀请
+      responses:
+        "200":
+          description: 成员列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/GroupMember"}
+        "401": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/webdav/group/members/create:
+    post:
+      tags: [Groups]
+      operationId: createGroupMember
+      summary: 添加或邀请分组成员
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateGroupMemberRequest"}
+      responses:
+        "200":
+          description: 成员或待确认邀请
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/GroupMember"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+        "409": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/webdav/group/members/update:
+    put:
+      tags: [Groups]
+      operationId: updateGroupMember
+      summary: 修改分组成员
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/UpdateGroupMemberRequest"}
+      responses:
+        "200":
+          description: 修改后的成员
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/GroupMember"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+        "409": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/webdav/group/members/name:
+    put:
+      tags: [Groups]
+      operationId: updateGroupMemberName
+      summary: 修改成员显示名称
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, name]
+              properties:
+                id: {type: string, format: uuid}
+                name: {type: string}
+      responses:
+        "200":
+          description: 修改后的成员
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/GroupMember"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/webdav/group/members/alias:
+    put:
+      tags: [Groups]
+      operationId: updateGroupMemberAlias
+      summary: 修改成员备注
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: {type: string, format: uuid}
+                alias: {type: string}
+      responses:
+        "200":
+          description: 修改后的成员
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/GroupMember"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/webdav/group/members/approve:
+    post:
+      tags: [Groups]
+      operationId: approveGroupInvite
+      summary: 确认分组邀请
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: {type: string, format: uuid, description: 待确认成员记录 ID}
+                name: {type: string}
+      responses:
+        "200": {description: 邀请已确认}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/webdav/group/members/reject:
+    post:
+      tags: [Groups]
+      operationId: rejectGroupInvite
+      summary: 拒绝分组邀请
+      requestBody: {$ref: "#/components/requestBodies/IDRequest"}
+      responses:
+        "200": {description: 邀请已拒绝}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/webdav/group/members/delete:
+    delete:
+      tags: [Groups]
+      operationId: deleteGroupMember
+      summary: 删除分组成员
+      requestBody: {$ref: "#/components/requestBodies/IDRequest"}
+      responses:
+        "200": {description: 成员已删除}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+
+  /api/v1/public/webdav/recycle/list:
+    get:
+      tags: [Recycle]
+      operationId: listRecycleItems
+      summary: 分页列出回收站项目
+      parameters:
+        - {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}
+        - {name: page_size, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+        - {name: search, in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: 回收站列表
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RecycleList"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/webdav/recycle/recover:
+    post:
+      tags: [Recycle]
+      operationId: recoverRecycleItem
+      summary: 恢复回收站项目
+      requestBody: {$ref: "#/components/requestBodies/HashRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/MessageResponse"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/webdav/recycle/permanent:
+    delete:
+      tags: [Recycle]
+      operationId: permanentlyDeleteRecycleItem
+      summary: 永久删除回收站项目
+      requestBody: {$ref: "#/components/requestBodies/HashRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/MessageResponse"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/webdav/recycle/clear:
+    delete:
+      tags: [Recycle]
+      operationId: clearRecycle
+      summary: 清空回收站
+      responses:
+        "200":
+          description: 清空成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: {type: integer, minimum: 0}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+
+  /api/v1/admin/notifications/list:
+    get:
+      tags: [Admin notifications]
+      operationId: listAdminNotifications
+      summary: 列出管理员通知
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, default: 20}}
+      responses:
+        "200":
+          description: 管理员通知列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/Notification"}
+        "401": {$ref: "#/components/responses/LegacyError"}
+        "403": {$ref: "#/components/responses/LegacyError"}
+  /api/v1/admin/notifications/unread-count:
+    get:
+      tags: [Admin notifications]
+      operationId: getAdminNotificationUnreadCount
+      summary: 获取管理员未读通知数
+      responses:
+        "200":
+          description: 未读数
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [count]
+                properties:
+                  count: {type: integer, minimum: 0}
+        "403": {$ref: "#/components/responses/LegacyError"}
+  /api/v1/admin/notifications/read:
+    post:
+      tags: [Admin notifications]
+      operationId: markAdminNotificationsRead
+      summary: 批量标记管理员通知已读
+      requestBody: {$ref: "#/components/requestBodies/IDsRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/MessageResponse"}
+        "400": {$ref: "#/components/responses/LegacyError"}
+        "403": {$ref: "#/components/responses/LegacyError"}
+  /api/v1/admin/notifications/read-all:
+    post:
+      tags: [Admin notifications]
+      operationId: markAllAdminNotificationsRead
+      summary: 标记所有管理员通知已读
+      responses:
+        "200": {$ref: "#/components/responses/MessageResponse"}
+        "403": {$ref: "#/components/responses/LegacyError"}
+  /api/v1/admin/notifications/create:
+    post:
+      tags: [Admin notifications]
+      operationId: createAdminAnnouncement
+      summary: 发布公告或定向通知
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateAnnouncementRequest"}
+      responses:
+        "200":
+          description: 发布成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, count]
+                properties:
+                  message: {type: string, const: ok}
+                  count: {type: integer, minimum: 0}
+        "400": {$ref: "#/components/responses/LegacyError"}
+        "403": {$ref: "#/components/responses/LegacyError"}
+  /api/v1/admin/notifications/stream:
+    get:
+      tags: [Admin notifications]
+      operationId: streamAdminNotificationUnreadCount
+      summary: 订阅管理员未读数 SSE 流
+      responses:
+        "200":
+          description: Server-Sent Events 流
+          content:
+            text/event-stream:
+              schema: {type: string}
+              example: "event: unread\ndata: {\"admin\":1}\n\n"
+        "403": {$ref: "#/components/responses/LegacyError"}
+
+  /api/v1/admin/users/list:
+    get:
+      tags: [Admin users]
+      operationId: listAdminUsers
+      summary: 列出所有用户
+      responses:
+        "200":
+          description: 用户列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/AdminUser"}
+        "403": {$ref: "#/components/responses/LegacyError"}
+  /api/v1/admin/users/create:
+    post:
+      tags: [Admin users]
+      operationId: createAdminUser
+      summary: 创建用户
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateAdminUserRequest"}
+      responses:
+        "201":
+          description: 用户创建成功
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AdminUser"}
+        "400": {$ref: "#/components/responses/LegacyError"}
+        "403": {$ref: "#/components/responses/LegacyError"}
+        "409": {$ref: "#/components/responses/LegacyError"}
+  /api/v1/admin/users/update:
+    post:
+      tags: [Admin users]
+      operationId: updateAdminUser
+      summary: 修改用户
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/UpdateAdminUserRequest"}
+      responses:
+        "200":
+          description: 修改后的用户
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AdminUser"}
+        "400": {$ref: "#/components/responses/LegacyError"}
+        "403": {$ref: "#/components/responses/LegacyError"}
+        "404": {$ref: "#/components/responses/LegacyError"}
+        "409": {$ref: "#/components/responses/LegacyError"}
+  /api/v1/admin/users/delete:
+    post:
+      tags: [Admin users]
+      operationId: deleteAdminUser
+      summary: 删除用户
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AdminUsernameRequest"}
+      responses:
+        "200":
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: {type: boolean, const: true}
+        "403": {$ref: "#/components/responses/LegacyError"}
+        "404": {$ref: "#/components/responses/LegacyError"}
+  /api/v1/admin/users/reset-password:
+    post:
+      tags: [Admin users]
+      operationId: resetAdminUserPassword
+      summary: 管理员重置用户密码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/AdminUsernameRequest"
+                - type: object
+                  required: [password]
+                  properties:
+                    password: {type: string, format: password, minLength: 1}
+      responses:
+        "200":
+          description: 重置成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success]
+                properties:
+                  success: {type: boolean, const: true}
+        "400": {$ref: "#/components/responses/LegacyError"}
+        "403": {$ref: "#/components/responses/LegacyError"}
+        "404": {$ref: "#/components/responses/LegacyError"}
+
+  /api/v1/public/share/create:
+    post:
+      tags: [Public shares]
+      operationId: createPublicShare
+      summary: 创建公开分享链接
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreatePublicShareRequest"}
+      responses:
+        "200":
+          description: 分享创建成功
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PublicShare"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/list:
+    get:
+      tags: [Public shares]
+      operationId: listPublicShares
+      summary: 列出当前用户创建的公开分享
+      responses:
+        "200":
+          description: 分享列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/PublicShare"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/revoke:
+    post:
+      tags: [Public shares]
+      operationId: revokePublicShare
+      summary: 撤销公开分享
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: {type: string, minLength: 1}
+      responses:
+        "200": {$ref: "#/components/responses/MessageResponse"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/{token}/{filename}:
+    parameters:
+      - {name: token, in: path, required: true, schema: {type: string}}
+      - {name: filename, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [Public shares]
+      operationId: downloadPublicShare
+      summary: 预览或下载公开分享文件
+      security: []
+      responses:
+        "200":
+          description: 文件内容，Content-Disposition 由分享模式决定
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+        "410": {$ref: "#/components/responses/PlainTextError"}
+    head:
+      tags: [Public shares]
+      operationId: headPublicShare
+      summary: 获取公开分享文件元信息
+      security: []
+      responses:
+        "200": {description: 文件存在}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+        "410": {$ref: "#/components/responses/PlainTextError"}
+
+  /api/v1/public/share/user/create:
+    post:
+      tags: [Directed shares]
+      operationId: createDirectedShare
+      summary: 创建定向分享
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateDirectedShareRequest"}
+      responses:
+        "200":
+          description: 分享创建成功
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DirectedShare"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/user/list:
+    get:
+      tags: [Directed shares]
+      operationId: listMyDirectedShares
+      summary: 列出我创建的定向分享
+      responses:
+        "200":
+          description: 分享列表
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DirectedShareList"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/user/received:
+    get:
+      tags: [Directed shares]
+      operationId: listReceivedDirectedShares
+      summary: 列出分享给我的项目
+      responses:
+        "200":
+          description: 分享列表
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DirectedShareList"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/user/revoke:
+    post:
+      tags: [Directed shares]
+      operationId: revokeDirectedShare
+      summary: 撤销定向分享
+      requestBody: {$ref: "#/components/requestBodies/IDRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/MessageResponse"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/user/audiences:
+    get:
+      tags: [Directed shares]
+      operationId: listDirectedShareAudiences
+      summary: 查看定向分享的受众
+      parameters:
+        - {name: shareId, in: query, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: 受众列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/ShareAudience"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/user/entries:
+    get:
+      tags: [Directed shares]
+      operationId: listDirectedShareEntries
+      summary: 列出定向分享目录内容
+      parameters:
+        - {name: shareId, in: query, required: true, schema: {type: string, format: uuid}}
+        - {name: path, in: query, schema: {type: string, default: ""}}
+      responses:
+        "200":
+          description: 目录项列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/ShareEntry"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+        "410": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/user/download:
+    get:
+      tags: [Directed shares]
+      operationId: downloadDirectedShareFile
+      summary: 下载或预览定向分享文件
+      parameters:
+        - {name: shareId, in: query, required: true, schema: {type: string, format: uuid}}
+        - {name: path, in: query, schema: {type: string}}
+        - {name: disposition, in: query, schema: {type: string, enum: [inline, attachment], default: attachment}}
+      responses:
+        "200":
+          description: 文件字节
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+        "410": {$ref: "#/components/responses/PlainTextError"}
+    head:
+      tags: [Directed shares]
+      operationId: headDirectedShareFile
+      summary: 获取定向分享文件元信息
+      parameters:
+        - {name: shareId, in: query, required: true, schema: {type: string, format: uuid}}
+        - {name: path, in: query, schema: {type: string}}
+      responses:
+        "200": {description: 文件存在}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/user/upload:
+    put:
+      tags: [Directed shares]
+      operationId: uploadDirectedShareFile
+      summary: 向定向分享目录上传文件
+      parameters:
+        - {name: shareId, in: query, required: true, schema: {type: string, format: uuid}}
+        - {name: path, in: query, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: {type: string, format: binary}
+      responses:
+        "200": {$ref: "#/components/responses/MessageResponse"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "410": {$ref: "#/components/responses/PlainTextError"}
+    post:
+      tags: [Directed shares]
+      operationId: uploadDirectedShareFilePost
+      summary: 使用 POST 向定向分享目录上传文件
+      parameters:
+        - {name: shareId, in: query, required: true, schema: {type: string, format: uuid}}
+        - {name: path, in: query, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: {type: string, format: binary}
+      responses:
+        "200": {$ref: "#/components/responses/MessageResponse"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/user/folder:
+    post:
+      tags: [Directed shares]
+      operationId: createDirectedShareFolder
+      summary: 在定向分享中创建目录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SharePathRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/MessageResponse"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/user/rename:
+    post:
+      tags: [Directed shares]
+      operationId: renameDirectedShareItem
+      summary: 重命名定向分享中的文件或目录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [shareId, from, to]
+              properties:
+                shareId: {type: string, format: uuid}
+                from: {type: string, minLength: 1}
+                to: {type: string, minLength: 1}
+      responses:
+        "200": {$ref: "#/components/responses/MessageResponse"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/user/item:
+    delete:
+      tags: [Directed shares]
+      operationId: deleteDirectedShareItem
+      summary: 删除定向分享中的文件或目录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SharePathRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/MessageResponse"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+
+  /api/v1/public/uploads/sessions:
+    post:
+      tags: [Upload sessions]
+      operationId: createUploadSession
+      summary: 创建可恢复分片上传会话
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateUploadSessionRequest"}
+      responses:
+        "201":
+          description: 上传会话已创建
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UploadSession"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "413": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/uploads/sessions/{sessionId}:
+    parameters:
+      - {name: sessionId, in: path, required: true, schema: {type: string, format: uuid}}
+    get:
+      tags: [Upload sessions]
+      operationId: getUploadSession
+      summary: 获取上传会话和已上传分片
+      responses:
+        "200":
+          description: 上传会话
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UploadSession"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+    delete:
+      tags: [Upload sessions]
+      operationId: abortUploadSession
+      summary: 取消上传会话
+      responses:
+        "200":
+          description: 会话已取消
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [aborted]
+                properties:
+                  aborted: {type: boolean, const: true}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/uploads/sessions/{sessionId}/parts/{partNumber}:
+    put:
+      tags: [Upload sessions]
+      operationId: uploadSessionPart
+      summary: 上传一个原始字节分片
+      parameters:
+        - {name: sessionId, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: partNumber, in: path, required: true, schema: {type: integer, minimum: 1}}
+        - name: X-Warehouse-Checksum-SHA256
+          in: header
+          required: true
+          description: 分片内容的 64 位十六进制 SHA-256；也兼容 x-amz-checksum-sha256
+          schema: {type: string, pattern: "^[0-9a-fA-F]{64}$"}
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
+      responses:
+        "200":
+          description: 分片上传成功
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UploadPartResponse"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/uploads/sessions/{sessionId}/complete:
+    post:
+      tags: [Upload sessions]
+      operationId: completeUploadSession
+      summary: 合并已上传分片并完成会话
+      parameters:
+        - {name: sessionId, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: 上传完成
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UploadSession"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT or UCAN
+    refreshCookie:
+      type: apiKey
+      in: cookie
+      name: refresh_token
+  requestBodies:
+    IDRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [id]
+            properties:
+              id: {type: string, format: uuid}
+    IDsRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ids]
+            properties:
+              ids:
+                type: array
+                items: {type: string, format: uuid}
+    HashRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [hash]
+            properties:
+              hash: {type: string, minLength: 1}
+  responses:
+    SDKBadRequest:
+      description: 请求参数无效
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/SDKError"}
+    SDKUnauthorized:
+      description: 未认证或凭据无效
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/SDKError"}
+    SDKNotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/SDKError"}
+    LegacyError:
+      description: 旧版 JSON 错误响应
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/LegacyError"}
+    PlainTextError:
+      description: 当前 Handler 使用 http.Error 返回的纯文本错误
+      content:
+        text/plain:
+          schema: {type: string}
+    MessageResponse:
+      description: 操作成功
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [message]
+            properties:
+              message: {type: string}
+  schemas:
+    WalletAddress:
+      type: string
+      pattern: "^0x[0-9a-fA-F]{40}$"
+      example: "0x9AdD99615252CaF379030d8966965BD9e5D80157"
+    HealthResponse:
+      type: object
+      required: [status, uptime, version]
+      properties:
+        status: {type: string, example: healthy}
+        uptime:
+          type: integer
+          format: int64
+          description: Go time.Duration 的纳秒数
+        version: {type: string, example: 2.0.0}
+    ReadinessCheck:
+      type: object
+      required: [name, status]
+      properties:
+        name: {type: string}
+        status: {type: string}
+        error: {type: string}
+    ReadinessResponse:
+      type: object
+      required: [status, checks]
+      properties:
+        status: {type: string}
+        checks:
+          type: array
+          items: {$ref: "#/components/schemas/ReadinessCheck"}
+    SDKError:
+      type: object
+      required: [code, message, timestamp]
+      properties:
+        code:
+          oneOf: [{type: integer}, {type: string}]
+        message: {type: string}
+        data: {type: [object, "null"], additionalProperties: true}
+        timestamp: {type: integer, format: int64}
+    LegacyError:
+      type: object
+      required: [error, code, success]
+      properties:
+        error: {type: string}
+        code: {type: integer}
+        success: {type: boolean, const: false}
+    ChallengeRequest:
+      type: object
+      required: [address]
+      properties:
+        address: {$ref: "#/components/schemas/WalletAddress"}
+    VerifyWalletRequest:
+      type: object
+      required: [address, signature]
+      properties:
+        address: {$ref: "#/components/schemas/WalletAddress"}
+        signature: {type: string, example: "0x..."}
+    PasswordLoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string, minLength: 1}
+        password: {type: string, format: password, minLength: 1}
+    ChallengeData:
+      type: object
+      required: [address, challenge, nonce, issuedAt, expiresAt]
+      properties:
+        address: {$ref: "#/components/schemas/WalletAddress"}
+        challenge: {type: string}
+        nonce: {type: string}
+        issuedAt: {type: integer, format: int64}
+        expiresAt: {type: integer, format: int64}
+    AuthTokenData:
+      type: object
+      required: [address, token, expiresAt, refreshExpiresAt]
+      properties:
+        address: {type: string}
+        username: {type: string}
+        token: {type: string, writeOnly: true}
+        expiresAt: {type: integer, format: int64}
+        refreshExpiresAt: {type: integer, format: int64}
+    EmailCodeData:
+      type: object
+      required: [email, expiresAt, retryAfter]
+      properties:
+        email: {type: string, format: email}
+        expiresAt: {type: integer, format: int64}
+        retryAfter: {type: integer, minimum: 0, description: 可再次发送前需等待的秒数}
+    EmailAuthTokenData:
+      type: object
+      required: [email, username, token, expiresAt, refreshExpiresAt]
+      properties:
+        email: {type: string, format: email}
+        username: {type: string}
+        token: {type: string, writeOnly: true}
+        expiresAt: {type: integer, format: int64}
+        refreshExpiresAt: {type: integer, format: int64}
+    ChallengeEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/SDKEnvelope"
+        - type: object
+          properties:
+            data: {$ref: "#/components/schemas/ChallengeData"}
+    AuthTokenEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/SDKEnvelope"
+        - type: object
+          properties:
+            data: {$ref: "#/components/schemas/AuthTokenData"}
+    EmailCodeEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/SDKEnvelope"
+        - type: object
+          properties:
+            data: {$ref: "#/components/schemas/EmailCodeData"}
+    EmailAuthTokenEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/SDKEnvelope"
+        - type: object
+          properties:
+            data: {$ref: "#/components/schemas/EmailAuthTokenData"}
+    LogoutEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/SDKEnvelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [logout]
+              properties:
+                logout: {type: boolean, const: true}
+    SDKEnvelope:
+      type: object
+      required: [code, message, data, timestamp]
+      properties:
+        code: {type: integer, const: 0}
+        message: {type: string, const: ok}
+        data: {}
+        timestamp: {type: integer, format: int64}
+    AssetSpace:
+      type: object
+      required: [key, name, path]
+      properties:
+        key: {type: string, enum: [personal, apps, services]}
+        name: {type: string}
+        path: {type: string, pattern: "^/(personal|apps|services)$"}
+    AssetSpacesEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/SDKEnvelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [defaultSpace, spaces]
+              properties:
+                defaultSpace: {type: string}
+                spaces:
+                  type: array
+                  items: {$ref: "#/components/schemas/AssetSpace"}
+    Quota:
+      type: object
+      required: [quota, used, available, percentage, unlimited]
+      properties:
+        quota: {type: integer, format: int64, minimum: 0}
+        used: {type: integer, format: int64, minimum: 0}
+        available: {type: integer, format: int64}
+        percentage: {type: number, format: double}
+        unlimited: {type: boolean}
+    Permission:
+      type: string
+      enum: [read, create, update, delete]
+    CredentialStatus:
+      type: string
+      enum: [active, revoked]
+    WebDAVAccessKey:
+      type: object
+      required: [id, name, keyId, permissions, bindingPaths, status, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        keyId: {type: string, example: ak_xxxxxxxxxxxxxxxx}
+        permissions:
+          type: array
+          items: {$ref: "#/components/schemas/Permission"}
+        bindingPaths:
+          type: array
+          items: {type: string}
+        status: {$ref: "#/components/schemas/CredentialStatus"}
+        expiresAt: {type: string}
+        lastUsedAt: {type: string}
+        createdAt: {type: string}
+    CreateWebDAVAccessKeyRequest:
+      type: object
+      required: [name, permissions]
+      properties:
+        name: {type: string, minLength: 1}
+        permissions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {$ref: "#/components/schemas/Permission"}
+        expiresValue: {type: integer, format: int64, minimum: 0}
+        expiresUnit: {type: string, enum: [minute, hour, day, week, month, year, never]}
+    CreatedWebDAVAccessKey:
+      allOf:
+        - $ref: "#/components/schemas/WebDAVAccessKey"
+        - type: object
+          required: [keySecret]
+          properties:
+            keySecret: {type: string, writeOnly: true}
+    S3Credential:
+      type: object
+      required: [id, name, accessKeyId, rootPath, permissions, status, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        accessKeyId: {type: string, example: AKxxxxxxxxxxxxxxxx}
+        rootPath:
+          type: string
+          pattern: "^/(personal|apps|services)(/.*)?$"
+          example: /personal/backup
+        permissions:
+          type: string
+          example: read,create,update,delete
+        status: {$ref: "#/components/schemas/CredentialStatus"}
+        createdAt: {type: string}
+    CreateS3CredentialRequest:
+      type: object
+      required: [name, permissions]
+      properties:
+        name: {type: string, minLength: 1, example: backup-s3-key}
+        rootPath:
+          type: string
+          default: /personal
+          pattern: "^/(personal|apps|services)(/.*)?$"
+          example: /personal/backup
+          description: Warehouse 服务端的 bucket/key prefix 授权范围
+        permissions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {$ref: "#/components/schemas/Permission"}
+    CreatedS3Credential:
+      allOf:
+        - $ref: "#/components/schemas/S3Credential"
+        - type: object
+          required: [secret]
+          properties:
+            secret: {type: string, writeOnly: true}
+            warning: {type: string}
+    NotificationType:
+      type: string
+      enum: [quota, share, group_invite, system, admin_notice]
+    Notification:
+      type: object
+      required: [id, type, title, content, severity, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        type: {$ref: "#/components/schemas/NotificationType"}
+        title: {type: string}
+        content: {type: string}
+        severity: {type: string, enum: [info, warning, error]}
+        actionUrl:
+          type: string
+          description: 分组邀请形如 `#group-invite:<member-id>`
+        readAt: {type: string}
+        createdAt: {type: string}
+    NotificationPreference:
+      type: object
+      required: [type, enabled]
+      properties:
+        type: {$ref: "#/components/schemas/NotificationType"}
+        enabled: {type: boolean}
+    CreateAnnouncementRequest:
+      type: object
+      required: [recipientRole, title, content]
+      properties:
+        recipientRole: {type: string, enum: [user, admin, all]}
+        targetUsernames:
+          type: array
+          items: {type: string}
+        title: {type: string, minLength: 1}
+        content: {type: string, minLength: 1}
+        severity: {type: string, enum: [info, warning, error], default: info}
+        actionUrl: {type: string}
+    Group:
+      type: object
+      required: [id, name, canManage, canInvite, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        canManage: {type: boolean}
+        canInvite: {type: boolean}
+        createdAt: {type: string}
+    GroupMember:
+      type: object
+      required: [id, name, alias, walletAddress, groupId, status, isOwner, isSelf, canManage, canRespond, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        alias: {type: string}
+        walletAddress: {$ref: "#/components/schemas/WalletAddress"}
+        groupId: {type: string, format: uuid}
+        status: {type: string, enum: [pending, active]}
+        isOwner: {type: boolean}
+        isSelf: {type: boolean}
+        canManage: {type: boolean}
+        canRespond: {type: boolean}
+        createdAt: {type: string}
+    CreateGroupMemberRequest:
+      type: object
+      required: [groupId]
+      properties:
+        target:
+          type: string
+          description: 用户名或钱包地址；为空时兼容读取 walletAddress
+        walletAddress: {$ref: "#/components/schemas/WalletAddress"}
+        alias: {type: string}
+        groupId: {type: string, format: uuid}
+    UpdateGroupMemberRequest:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        walletAddress: {$ref: "#/components/schemas/WalletAddress"}
+        groupId: {type: string, format: uuid}
+    RecycleItem:
+      type: object
+      required: [hash, name, path, size, deletedAt, directory, isDir]
+      properties:
+        hash: {type: string}
+        name: {type: string}
+        path: {type: string}
+        size: {type: integer, format: int64, minimum: 0}
+        deletedAt: {type: string, format: date-time}
+        directory: {type: string}
+        isDir: {type: boolean}
+    RecycleList:
+      type: object
+      required: [items, total, page, pageSize]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/RecycleItem"}
+        total: {type: integer, minimum: 0}
+        page: {type: integer, minimum: 1}
+        pageSize: {type: integer, minimum: 1, maximum: 200}
+    AdminRule:
+      type: object
+      required: [path, permissions, regex]
+      properties:
+        path: {type: string, minLength: 1}
+        permissions:
+          type: array
+          items: {$ref: "#/components/schemas/Permission"}
+        regex: {type: boolean}
+    AdminUser:
+      type: object
+      required: [id, username, directory, permissions, quota, used_space, has_password]
+      properties:
+        id: {type: string, format: uuid}
+        username: {type: string}
+        wallet_address: {$ref: "#/components/schemas/WalletAddress"}
+        email: {type: string, format: email}
+        directory: {type: string}
+        permissions:
+          type: array
+          items: {$ref: "#/components/schemas/Permission"}
+        quota: {type: integer, format: int64, minimum: 0}
+        used_space: {type: integer, format: int64, minimum: 0}
+        rules:
+          type: array
+          items: {$ref: "#/components/schemas/AdminRule"}
+        created_at: {type: string}
+        updated_at: {type: string}
+        has_password: {type: boolean}
+    CreateAdminUserRequest:
+      type: object
+      required: [username]
+      anyOf:
+        - required: [password]
+        - required: [wallet_address]
+      properties:
+        username: {type: string, minLength: 1}
+        password: {type: string, format: password}
+        wallet_address: {$ref: "#/components/schemas/WalletAddress"}
+        email: {type: string, format: email}
+        directory: {type: string}
+        permissions:
+          type: array
+          items: {$ref: "#/components/schemas/Permission"}
+        quota: {type: integer, format: int64, minimum: 0}
+        rules:
+          type: array
+          items: {$ref: "#/components/schemas/AdminRule"}
+    UpdateAdminUserRequest:
+      type: object
+      required: [username]
+      properties:
+        username: {type: string, minLength: 1, description: 待修改用户}
+        new_username: {type: string, minLength: 1}
+        wallet_address: {$ref: "#/components/schemas/WalletAddress"}
+        email: {type: string, format: email}
+        directory: {type: string, minLength: 1}
+        permissions:
+          type: array
+          items: {$ref: "#/components/schemas/Permission"}
+        quota: {type: integer, format: int64, minimum: 0}
+        rules:
+          type: array
+          items: {$ref: "#/components/schemas/AdminRule"}
+    AdminUsernameRequest:
+      type: object
+      required: [username]
+      properties:
+        username: {type: string, minLength: 1}
+    ShareExpiry:
+      type: object
+      properties:
+        expiresIn: {type: integer, format: int64, minimum: 0}
+        expiresValue: {type: integer, format: int64, minimum: 0}
+        expiresUnit: {type: string, enum: [minute, hour, day, week, month, year]}
+    CreatePublicShareRequest:
+      allOf:
+        - $ref: "#/components/schemas/ShareExpiry"
+        - type: object
+          required: [path]
+          properties:
+            path: {type: string, minLength: 1}
+            mode: {type: string, enum: [download, preview], default: download}
+    PublicShare:
+      type: object
+      required: [token, name, path, mode, url, viewCount, downloadCount]
+      properties:
+        token: {type: string}
+        name: {type: string}
+        path: {type: string}
+        mode: {type: string, enum: [download, preview]}
+        url: {type: string, format: uri}
+        viewCount: {type: integer, format: int64, minimum: 0}
+        downloadCount: {type: integer, format: int64, minimum: 0}
+        expiresAt: {type: string}
+        createdAt: {type: string}
+    CreateDirectedShareRequest:
+      allOf:
+        - $ref: "#/components/schemas/ShareExpiry"
+        - type: object
+          required: [path, targetMode, permissions]
+          properties:
+            path: {type: string, minLength: 1}
+            targetAddresses:
+              type: array
+              items: {$ref: "#/components/schemas/WalletAddress"}
+            targetMode: {type: string, enum: [addresses, groups, all_users]}
+            groupIds:
+              type: array
+              items: {type: string, format: uuid}
+            permissions:
+              type: array
+              minItems: 1
+              items: {$ref: "#/components/schemas/Permission"}
+    DirectedShare:
+      type: object
+      required: [id, name, path, isDir, permissions, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        path: {type: string}
+        isDir: {type: boolean}
+        permissions:
+          type: array
+          items: {$ref: "#/components/schemas/Permission"}
+        targetWallet: {type: string}
+        targetType: {type: string, enum: [addresses, groups, all_users]}
+        targetCount: {type: integer, minimum: 0}
+        audienceCount: {type: integer, minimum: 0}
+        targetGroups:
+          type: array
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id: {type: string, format: uuid}
+              name: {type: string}
+        allUsers: {type: boolean}
+        ownerWallet: {type: string}
+        ownerName: {type: string}
+        expiresAt: {type: string}
+        createdAt: {type: string}
+    DirectedShareList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/DirectedShare"}
+    ShareAudience:
+      type: object
+      required: [type]
+      properties:
+        type: {type: string}
+        targetUserId: {type: string, format: uuid}
+        targetWallet: {type: string}
+        sourceGroupId: {type: string, format: uuid}
+        sourceGroupName: {type: string}
+    ShareEntry:
+      type: object
+      required: [name, path, isDir, size, modified]
+      properties:
+        name: {type: string}
+        path: {type: string}
+        isDir: {type: boolean}
+        size: {type: integer, format: int64, minimum: 0}
+        modified: {type: string}
+    SharePathRequest:
+      type: object
+      required: [shareId, path]
+      properties:
+        shareId: {type: string, format: uuid}
+        path: {type: string, minLength: 1}
+    CreateUploadSessionRequest:
+      type: object
+      required: [path, size, chunkSize, fileName]
+      properties:
+        path: {type: string, minLength: 1}
+        shareId: {type: string, format: uuid, description: 定向分享上传时填写}
+        size: {type: integer, format: int64, minimum: 0}
+        chunkSize: {type: integer, format: int64, minimum: 1}
+        fileName: {type: string, minLength: 1}
+        contentType: {type: string}
+        lastModified: {type: integer, format: int64}
+    UploadSessionPart:
+      type: object
+      required: [partNumber, size, etag, checksumSha256, updatedAt]
+      properties:
+        partNumber: {type: integer, minimum: 1}
+        size: {type: integer, format: int64, minimum: 0}
+        etag: {type: string}
+        checksumSha256: {type: string}
+        updatedAt: {type: string, format: date-time}
+    UploadSession:
+      type: object
+      required: [id, scope, path, size, chunkSize, fileName, status, createdAt, updatedAt, expiresAt, parts]
+      properties:
+        id: {type: string, format: uuid}
+        scope: {type: string}
+        path: {type: string}
+        shareId: {type: string, format: uuid}
+        size: {type: integer, format: int64, minimum: 0}
+        chunkSize: {type: integer, format: int64, minimum: 1}
+        fileName: {type: string}
+        contentType: {type: string}
+        lastModified: {type: integer, format: int64}
+        status: {type: string}
+        createdAt: {type: string}
+        updatedAt: {type: string}
+        expiresAt: {type: string}
+        parts:
+          type: array
+          items: {$ref: "#/components/schemas/UploadSessionPart"}
+    UploadPartResponse:
+      type: object
+      required: [session, part]
+      properties:
+        session: {$ref: "#/components/schemas/UploadSession"}
+        part: {$ref: "#/components/schemas/UploadSessionPart"}
+
+security:
+  - bearerAuth: []

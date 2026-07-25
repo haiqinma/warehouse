@@ -199,6 +199,9 @@ func (s *Server) handleObject(w http.ResponseWriter, req *http.Request, credenti
 		requestedPath = "/" + bucket + "/" + strings.TrimSuffix(prefix, "/")
 	} else if req.Method == http.MethodHead && bucketVisible(credential.RootPath, bucket) {
 		requestedPath = credential.RootPath
+	} else if req.Method == http.MethodPost && query.Has("delete") && bucketVisible(credential.RootPath, bucket) {
+		// DeleteObjects validates every key against the credential scope.
+		requestedPath = credential.RootPath
 	}
 	if !s.pathAllowed(credential.RootPath, requestedPath) {
 		s.writeError(w, http.StatusForbidden, "AccessDenied", "credential is not bound to this path")

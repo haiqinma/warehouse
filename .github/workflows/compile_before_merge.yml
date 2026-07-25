@@ -41,7 +41,11 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: web
-        run: npm install
+        run: npm ci
+
+      - name: Validate OpenAPI contract and generated types
+        working-directory: web
+        run: npm run openapi:check
 
       - name: Build frontend
         working-directory: web
