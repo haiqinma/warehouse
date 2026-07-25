@@ -19,6 +19,7 @@ type NotificationRepository interface {
 	UnreadCountForRole(ctx context.Context, role string) (int, error)
 	MarkReadForUser(ctx context.Context, userID string, ids []string) error
 	MarkAllReadForUser(ctx context.Context, userID string) error
+	DismissByActionURLForUser(ctx context.Context, userID, actionURL string) error
 	MarkReadForRole(ctx context.Context, role string, ids []string) error
 	MarkAllReadForRole(ctx context.Context, role string) error
 	GetPreferences(ctx context.Context, userID string) ([]notification.Preference, error)
@@ -72,7 +73,7 @@ func (r *PostgresNotificationRepository) UpsertByDedupeKey(ctx context.Context, 
 		INSERT INTO notifications (
 			id, recipient_user_id, recipient_role, type, title, content, severity, action_url, dedupe_key, created_at, expires_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-		ON CONFLICT (dedupe_key) DO UPDATE SET
+		ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET
 			title = EXCLUDED.title,
 			content = EXCLUDED.content,
 			severity = EXCLUDED.severity,
@@ -183,6 +184,20 @@ func (r *PostgresNotificationRepository) MarkAllReadForUser(ctx context.Context,
 		WHERE (recipient_user_id = $1 OR recipient_role = 'all') AND read_at IS NULL
 	`
 	_, err := r.db.ExecContext(ctx, query, userID)
+	return err
+}
+
+func (r *PostgresNotificationRepository) DismissByActionURLForUser(ctx context.Context, userID, actionURL string) error {
+	actionURL = strings.TrimSpace(actionURL)
+	if userID == "" || actionURL == "" {
+		return nil
+	}
+	query := `
+		UPDATE notifications
+		SET read_at = COALESCE(read_at, NOW()), expires_at = NOW()
+		WHERE recipient_user_id = $1 AND action_url = $2
+	`
+	_, err := r.db.ExecContext(ctx, query, userID, actionURL)
 	return err
 }
 

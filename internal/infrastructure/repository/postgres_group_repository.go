@@ -22,6 +22,8 @@ type GroupRepository interface {
 	GetMemberByID(ctx context.Context, userID, memberID string) (*group.Member, error)
 	ListVisibleMembers(ctx context.Context, userID, walletAddress string) ([]*group.Member, error)
 	UpdateMember(ctx context.Context, member *group.Member) error
+	UpdateMemberNameByWallet(ctx context.Context, walletAddress, memberID, name string) error
+	SetMemberAlias(ctx context.Context, ownerUserID, memberID, alias string) error
 	UpdateMemberStatusByWallet(ctx context.Context, walletAddress, memberID, status string) error
 	DeleteMember(ctx context.Context, userID, memberID string) error
 	DeleteMemberByWallet(ctx context.Context, walletAddress, memberID string) error
@@ -63,7 +65,7 @@ func (r *PostgresGroupRepository) CreateGroup(ctx context.Context, grp *group.Gr
 			ownerMember.GroupID,
 			ownerMember.Name,
 			ownerMember.WalletAddress,
-			pq.Array(ownerMember.Tags),
+			pq.Array([]string{}),
 			group.NormalizeMemberStatus(ownerMember.Status),
 			ownerMember.CreatedAt,
 		); err != nil {
@@ -160,6 +162,7 @@ func (r *PostgresGroupRepository) ListVisibleGroups(ctx context.Context, userID,
 		LEFT JOIN group_members member
 			ON member.group_id = g.id
 			AND LOWER(member.wallet_address) = LOWER($2)
+			AND member.status = $3
 		LEFT JOIN group_members active_member
 			ON active_member.group_id = g.id
 			AND LOWER(active_member.wallet_address) = LOWER($2)
@@ -234,7 +237,7 @@ func (r *PostgresGroupRepository) CreateMember(ctx context.Context, member *grou
 		member.GroupID,
 		member.Name,
 		member.WalletAddress,
-		pq.Array(member.Tags),
+		pq.Array([]string{}),
 		group.NormalizeMemberStatus(member.Status),
 		member.CreatedAt,
 	)
@@ -254,9 +257,9 @@ func (r *PostgresGroupRepository) GetMemberByID(ctx context.Context, userID, mem
 			m.user_id,
 			m.group_id,
 			m.name,
+			COALESCE(alias.alias, ''),
 			COALESCE(invited.username, ''),
 			m.wallet_address,
-			m.tags,
 			m.status,
 			LOWER(m.wallet_address) = LOWER(COALESCE(owner.wallet_address, '')),
 			m.created_at
@@ -264,18 +267,20 @@ func (r *PostgresGroupRepository) GetMemberByID(ctx context.Context, userID, mem
 		JOIN address_groups g ON g.id = m.group_id
 		LEFT JOIN users owner ON owner.id = g.user_id
 		LEFT JOIN users invited ON LOWER(invited.wallet_address) = LOWER(m.wallet_address)
+		LEFT JOIN group_member_aliases alias
+			ON alias.member_id = m.id
+			AND alias.owner_user_id = $2
 		WHERE m.id = $1 AND m.user_id = $2
 	`
 	member := &group.Member{}
-	var tags []string
 	err := r.db.QueryRowContext(ctx, query, memberID, userID).Scan(
 		&member.ID,
 		&member.UserID,
 		&member.GroupID,
 		&member.Name,
+		&member.Alias,
 		&member.Username,
 		&member.WalletAddress,
-		pq.Array(&tags),
 		&member.Status,
 		&member.IsOwner,
 		&member.CreatedAt,
@@ -286,7 +291,6 @@ func (r *PostgresGroupRepository) GetMemberByID(ctx context.Context, userID, mem
 		}
 		return nil, fmt.Errorf("failed to get member: %w", err)
 	}
-	member.Tags = tags
 	member.Status = group.NormalizeMemberStatus(member.Status)
 	return member, nil
 }
@@ -298,9 +302,9 @@ func (r *PostgresGroupRepository) ListVisibleMembers(ctx context.Context, userID
 			m.user_id,
 			m.group_id,
 			m.name,
+			COALESCE(alias.alias, ''),
 			COALESCE(invited.username, ''),
 			m.wallet_address,
-			m.tags,
 			m.status,
 			LOWER(m.wallet_address) = LOWER(COALESCE(owner.wallet_address, '')),
 			m.created_at
@@ -308,6 +312,9 @@ func (r *PostgresGroupRepository) ListVisibleMembers(ctx context.Context, userID
 		JOIN address_groups g ON g.id = m.group_id
 		LEFT JOIN users owner ON owner.id = g.user_id
 		LEFT JOIN users invited ON LOWER(invited.wallet_address) = LOWER(m.wallet_address)
+		LEFT JOIN group_member_aliases alias
+			ON alias.member_id = m.id
+			AND alias.owner_user_id = $1
 		LEFT JOIN group_members current_member
 			ON current_member.group_id = g.id
 			AND current_member.status = $3
@@ -326,22 +333,20 @@ func (r *PostgresGroupRepository) ListVisibleMembers(ctx context.Context, userID
 	var members []*group.Member
 	for rows.Next() {
 		member := &group.Member{}
-		var tags []string
 		if err := rows.Scan(
 			&member.ID,
 			&member.UserID,
 			&member.GroupID,
 			&member.Name,
+			&member.Alias,
 			&member.Username,
 			&member.WalletAddress,
-			pq.Array(&tags),
 			&member.Status,
 			&member.IsOwner,
 			&member.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan member: %w", err)
 		}
-		member.Tags = tags
 		member.Status = group.NormalizeMemberStatus(member.Status)
 		members = append(members, member)
 	}
@@ -354,10 +359,10 @@ func (r *PostgresGroupRepository) ListVisibleMembers(ctx context.Context, userID
 func (r *PostgresGroupRepository) UpdateMember(ctx context.Context, member *group.Member) error {
 	query := `
 		UPDATE group_members
-		SET group_id = $1, name = $2, wallet_address = $3, tags = $4, status = $5
-		WHERE id = $6 AND user_id = $7
+		SET group_id = $1, name = $2, wallet_address = $3, status = $4
+		WHERE id = $5 AND user_id = $6
 	`
-	result, err := r.db.ExecContext(ctx, query, member.GroupID, member.Name, member.WalletAddress, pq.Array(member.Tags), group.NormalizeMemberStatus(member.Status), member.ID, member.UserID)
+	result, err := r.db.ExecContext(ctx, query, member.GroupID, member.Name, member.WalletAddress, group.NormalizeMemberStatus(member.Status), member.ID, member.UserID)
 	if err != nil {
 		if isDuplicateMemberError(err) {
 			return group.ErrDuplicateMember
@@ -370,6 +375,48 @@ func (r *PostgresGroupRepository) UpdateMember(ctx context.Context, member *grou
 	}
 	if rows == 0 {
 		return group.ErrMemberNotFound
+	}
+	return nil
+}
+
+func (r *PostgresGroupRepository) UpdateMemberNameByWallet(ctx context.Context, walletAddress, memberID, name string) error {
+	query := `UPDATE group_members SET name = $1 WHERE id = $2 AND LOWER(wallet_address) = LOWER($3)`
+	result, err := r.db.ExecContext(ctx, query, strings.TrimSpace(name), memberID, strings.TrimSpace(walletAddress))
+	if err != nil {
+		return fmt.Errorf("failed to update member name: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get affected rows: %w", err)
+	}
+	if rows == 0 {
+		return group.ErrMemberNotFound
+	}
+	return nil
+}
+
+func (r *PostgresGroupRepository) SetMemberAlias(ctx context.Context, ownerUserID, memberID, alias string) error {
+	ownerUserID = strings.TrimSpace(ownerUserID)
+	memberID = strings.TrimSpace(memberID)
+	alias = strings.TrimSpace(alias)
+	if ownerUserID == "" || memberID == "" {
+		return group.ErrMemberNotFound
+	}
+	if alias == "" {
+		_, err := r.db.ExecContext(ctx, `DELETE FROM group_member_aliases WHERE owner_user_id = $1 AND member_id = $2`, ownerUserID, memberID)
+		if err != nil {
+			return fmt.Errorf("failed to delete member alias: %w", err)
+		}
+		return nil
+	}
+	query := `
+		INSERT INTO group_member_aliases (owner_user_id, member_id, alias, updated_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (owner_user_id, member_id)
+		DO UPDATE SET alias = EXCLUDED.alias, updated_at = NOW()
+	`
+	if _, err := r.db.ExecContext(ctx, query, ownerUserID, memberID, alias); err != nil {
+		return fmt.Errorf("failed to set member alias: %w", err)
 	}
 	return nil
 }

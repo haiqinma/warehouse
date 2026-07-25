@@ -346,12 +346,12 @@ export interface ManagedGroup {
 export interface GroupMember {
   id: string
   name: string
-  username?: string
+  alias?: string
   walletAddress: string
   groupId: string
-  tags?: string[]
   status?: 'active' | 'pending' | string
   isOwner?: boolean
+  isSelf?: boolean
   canManage?: boolean
   canRespond?: boolean
   createdAt?: string
@@ -572,14 +572,32 @@ export const groupApi = {
   listMembers() {
     return request<{ items: GroupMember[] }>('/api/v1/public/webdav/group/members')
   },
-  createMember(payload: { name: string; walletAddress: string; groupId: string; tags?: string[] }) {
+  createMember(payload: { target: string; groupId: string; alias?: string }) {
+    const target = payload.target.trim()
+    const body: Record<string, unknown> = { ...payload, target }
+    if (/^0x[0-9a-fA-F]{40}$/.test(target)) {
+      body.name = target
+      body.walletAddress = target
+    }
     return request<GroupMember>('/api/v1/public/webdav/group/members/create', {
       method: 'POST',
+      body
+    })
+  },
+  updateMember(payload: { id: string; name?: string; walletAddress?: string; groupId?: string }) {
+    return request<GroupMember>('/api/v1/public/webdav/group/members/update', {
+      method: 'PUT',
       body: payload
     })
   },
-  updateMember(payload: { id: string; name?: string; walletAddress?: string; groupId?: string; tags?: string[] }) {
-    return request<GroupMember>('/api/v1/public/webdav/group/members/update', {
+  updateMemberName(payload: { id: string; name: string }) {
+    return request<GroupMember>('/api/v1/public/webdav/group/members/name', {
+      method: 'PUT',
+      body: payload
+    })
+  },
+  updateMemberAlias(payload: { id: string; alias: string }) {
+    return request<GroupMember>('/api/v1/public/webdav/group/members/alias', {
       method: 'PUT',
       body: payload
     })

@@ -246,6 +246,15 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 			created_at TIMESTAMP NOT NULL DEFAULT NOW()
 		)`,
 
+		// 分组成员别名：每个用户给可见成员设置自己的私有别名
+		`CREATE TABLE IF NOT EXISTS group_member_aliases (
+			owner_user_id VARCHAR(50) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			member_id VARCHAR(50) NOT NULL REFERENCES group_members(id) ON DELETE CASCADE,
+			alias TEXT NOT NULL,
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (owner_user_id, member_id)
+		)`,
+
 		// 复制 outbox：active 记录文件变更，后台异步分发到 standby
 		`CREATE TABLE IF NOT EXISTS replication_outbox (
 			id BIGSERIAL PRIMARY KEY,
@@ -464,6 +473,7 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_group_members_wallet_lower ON group_members(LOWER(wallet_address))`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_group_members_user_group_wallet
 			ON group_members(user_id, group_id, wallet_address)`,
+		`CREATE INDEX IF NOT EXISTS idx_group_member_aliases_member_id ON group_member_aliases(member_id)`,
 
 		// 复制 outbox 索引
 		`CREATE INDEX IF NOT EXISTS idx_replication_outbox_pair_pending
@@ -495,6 +505,22 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 			WHERE recipient_user_id IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_role_unread
 			ON notifications(recipient_role, read_at)`,
+		`WITH duplicate_notifications AS (
+			SELECT
+				id,
+				dedupe_key,
+				ROW_NUMBER() OVER (
+					PARTITION BY dedupe_key
+					ORDER BY created_at DESC, id DESC
+				) AS row_number
+			FROM notifications
+			WHERE dedupe_key IS NOT NULL
+		)
+		UPDATE notifications n
+		SET dedupe_key = n.dedupe_key || ':legacy:' || n.id
+		FROM duplicate_notifications d
+		WHERE n.id = d.id AND d.row_number > 1`,
+		`DROP INDEX IF EXISTS idx_notifications_dedupe_key`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedupe_key
 			ON notifications(dedupe_key)
 			WHERE dedupe_key IS NOT NULL`,

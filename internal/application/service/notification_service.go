@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/yeying-community/warehouse/internal/domain/group"
 	"github.com/yeying-community/warehouse/internal/domain/notification"
 	"github.com/yeying-community/warehouse/internal/domain/user"
 	"github.com/yeying-community/warehouse/internal/infrastructure/repository"
@@ -13,9 +14,10 @@ import (
 )
 
 type NotificationService struct {
-	repo     repository.NotificationRepository
-	userRepo user.Repository
-	logger   *zap.Logger
+	repo      repository.NotificationRepository
+	userRepo  user.Repository
+	groupRepo repository.GroupRepository
+	logger    *zap.Logger
 }
 
 type AnnouncementInput struct {
@@ -35,9 +37,19 @@ func NewNotificationService(repo repository.NotificationRepository, userRepo use
 	}
 }
 
+func (s *NotificationService) SetGroupRepository(groupRepo repository.GroupRepository) {
+	if s == nil {
+		return
+	}
+	s.groupRepo = groupRepo
+}
+
 func (s *NotificationService) ListForUser(ctx context.Context, u *user.User, limit int) ([]*notification.Notification, error) {
 	if s == nil || s.repo == nil || u == nil {
 		return nil, nil
+	}
+	if err := s.EnsureGroupInviteNotifications(ctx, u); err != nil {
+		return nil, err
 	}
 	return s.repo.ListForUser(ctx, u.ID, limit)
 }
@@ -67,6 +79,9 @@ func (s *NotificationService) ListForAdmin(ctx context.Context, limit int) ([]*n
 func (s *NotificationService) UnreadCountForUser(ctx context.Context, u *user.User) (int, error) {
 	if s == nil || s.repo == nil || u == nil {
 		return 0, nil
+	}
+	if err := s.EnsureGroupInviteNotifications(ctx, u); err != nil {
+		return 0, err
 	}
 	return s.repo.UnreadCountForUser(ctx, u.ID)
 }
@@ -125,6 +140,56 @@ func (s *NotificationService) MarkAllReadForCurrentUser(ctx context.Context, u *
 		return s.MarkAllReadForAdmin(ctx)
 	}
 	return nil
+}
+
+func (s *NotificationService) EnsureGroupInviteNotifications(ctx context.Context, u *user.User) error {
+	if s == nil || s.repo == nil || s.groupRepo == nil || u == nil || strings.TrimSpace(u.WalletAddress) == "" {
+		return nil
+	}
+	members, err := s.groupRepo.ListVisibleMembers(ctx, u.ID, u.WalletAddress)
+	if err != nil {
+		return err
+	}
+	for _, member := range members {
+		if !isPendingInviteForUser(u, member) {
+			continue
+		}
+		groupName := ""
+		grp, err := s.groupRepo.GetVisibleGroupByID(ctx, u.ID, u.WalletAddress, member.GroupID)
+		if err == nil && grp != nil {
+			groupName = grp.Name
+		}
+		if err := s.upsertGroupInvite(ctx, u.ID, groupName, member.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *NotificationService) NotifyGroupInvite(ctx context.Context, inviter *user.User, member *group.Member, groupName string) {
+	if s == nil || s.repo == nil || s.userRepo == nil || inviter == nil || member == nil || strings.TrimSpace(member.WalletAddress) == "" {
+		return
+	}
+	target, err := s.userRepo.FindByWalletAddress(ctx, member.WalletAddress)
+	if err != nil || target == nil || target.ID == inviter.ID {
+		return
+	}
+	if err := s.upsertGroupInvite(ctx, target.ID, groupName, member.ID); err != nil && s.logger != nil {
+		s.logger.Warn("failed to create group invite notification",
+			zap.String("member_id", member.ID),
+			zap.Error(err))
+	}
+}
+
+func (s *NotificationService) DismissGroupInvite(ctx context.Context, u *user.User, memberID string) {
+	if s == nil || s.repo == nil || u == nil {
+		return
+	}
+	if err := s.repo.DismissByActionURLForUser(ctx, u.ID, groupInviteActionURL(memberID)); err != nil && s.logger != nil {
+		s.logger.Warn("failed to dismiss group invite notification",
+			zap.String("member_id", memberID),
+			zap.Error(err))
+	}
 }
 
 func mergeNotificationsByCreatedAt(limit int, groups ...[]*notification.Notification) []*notification.Notification {
@@ -346,6 +411,40 @@ func (s *NotificationService) NotifyShareCreated(ctx context.Context, owner *use
 			DedupeKey:       "share:user:" + itemID + ":" + userID,
 		})
 	}
+}
+
+func (s *NotificationService) upsertGroupInvite(ctx context.Context, userID, groupName, memberID string) error {
+	groupName = strings.TrimSpace(groupName)
+	if groupName == "" {
+		groupName = "未命名分组"
+	}
+	memberID = strings.TrimSpace(memberID)
+	if userID == "" || memberID == "" {
+		return nil
+	}
+	return s.upsert(ctx, notification.CreateInput{
+		RecipientUserID: userID,
+		RecipientRole:   notification.RecipientRoleUser,
+		Type:            notification.TypeGroupInvite,
+		Title:           "收到分组邀请",
+		Content:         fmt.Sprintf("你被邀请加入分组「%s」，请确认是否加入。", groupName),
+		Severity:        notification.SeverityInfo,
+		ActionURL:       groupInviteActionURL(memberID),
+		DedupeKey:       fmt.Sprintf("group:invite:%s:%s", memberID, userID),
+	})
+}
+
+func isPendingInviteForUser(u *user.User, member *group.Member) bool {
+	if u == nil || member == nil || group.NormalizeMemberStatus(member.Status) != group.MemberStatusPending {
+		return false
+	}
+	userWallet := strings.TrimSpace(u.WalletAddress)
+	memberWallet := strings.TrimSpace(member.WalletAddress)
+	return userWallet != "" && memberWallet != "" && strings.EqualFold(userWallet, memberWallet)
+}
+
+func groupInviteActionURL(memberID string) string {
+	return "#group-invite:" + strings.TrimSpace(memberID)
 }
 
 func (s *NotificationService) EnsureUserQuotaNotification(ctx context.Context, u *user.User, quotaValue, used int64) error {

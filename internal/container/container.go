@@ -354,11 +354,13 @@ func (c *Container) initServices() error {
 		c.Logger,
 	)
 	// 分组管理服务
-	c.GroupService = service.NewGroupService(c.GroupRepository)
+	c.GroupService = service.NewGroupService(c.GroupRepository, c.UserRepository)
 	// WebDAV 访问密钥服务
 	c.WebDAVAccessKeyService = service.NewWebDAVAccessKeyService(c.WebDAVAccessKeyRepo)
 	// 站内消息服务
 	c.NotificationService = service.NewNotificationService(c.NotificationRepo, c.UserRepository, c.Logger)
+	c.NotificationService.SetGroupRepository(c.GroupRepository)
+	c.GroupService.SetNotificationService(c.NotificationService)
 	if c.QuotaReconciler != nil {
 		c.QuotaReconciler.SetNotificationService(c.NotificationService)
 	}

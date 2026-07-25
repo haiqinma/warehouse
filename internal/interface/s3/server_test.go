@@ -36,6 +36,32 @@ func TestVisibleS3BucketsFollowsCredentialRootPath(t *testing.T) {
 	}
 }
 
+func TestScopedListPrefix(t *testing.T) {
+	tests := []struct {
+		name      string
+		rootPath  string
+		bucket    string
+		requested string
+		want      string
+		allowed   bool
+	}{
+		{name: "bucket root", rootPath: "/services/project", bucket: "services", want: "project", allowed: true},
+		{name: "bound prefix", rootPath: "/services/project", bucket: "services", requested: "project", want: "project", allowed: true},
+		{name: "bound child", rootPath: "/services/project", bucket: "services", requested: "project/releases", want: "project/releases", allowed: true},
+		{name: "bound ancestor", rootPath: "/services/project/releases", bucket: "services", requested: "project", want: "project/releases", allowed: true},
+		{name: "other prefix", rootPath: "/services/project", bucket: "services", requested: "private", allowed: false},
+		{name: "other bucket", rootPath: "/services/project", bucket: "apps", requested: "project", allowed: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, allowed := scopedListPrefix(tt.rootPath, tt.bucket, tt.requested)
+			if got != tt.want || allowed != tt.allowed {
+				t.Fatalf("scopedListPrefix() = %q, %v; want %q, %v", got, allowed, tt.want, tt.allowed)
+			}
+		})
+	}
+}
+
 func TestHandleDeleteObjectsDeletesRequestedKeys(t *testing.T) {
 	root := t.TempDir()
 	objects := service.NewObjectService(root)

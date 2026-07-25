@@ -184,15 +184,26 @@ func (s *Server) handleObject(w http.ResponseWriter, req *http.Request, credenti
 		return
 	}
 	userDirectory := owner.Directory
+	query := req.URL.Query()
 	requestedPath := "/" + bucket
 	if key != "" {
 		requestedPath += "/" + key
+	} else if req.Method == http.MethodGet {
+		prefix, ok := scopedListPrefix(credential.RootPath, bucket, query.Get("prefix"))
+		if !ok {
+			s.writeError(w, http.StatusForbidden, "AccessDenied", "credential is not bound to this path")
+			return
+		}
+		query.Set("prefix", prefix)
+		req.URL.RawQuery = query.Encode()
+		requestedPath = "/" + bucket + "/" + strings.TrimSuffix(prefix, "/")
+	} else if req.Method == http.MethodHead && bucketVisible(credential.RootPath, bucket) {
+		requestedPath = credential.RootPath
 	}
 	if !s.pathAllowed(credential.RootPath, requestedPath) {
 		s.writeError(w, http.StatusForbidden, "AccessDenied", "credential is not bound to this path")
 		return
 	}
-	query := req.URL.Query()
 	if req.Method == http.MethodPost && query.Has("uploads") {
 		s.handleCreateMultipart(w, req, credential, owner, bucket, key)
 		return
@@ -467,6 +478,41 @@ func (s *Server) pathAllowed(rootPath, requestedPath string) bool {
 	rootPath = path.Clean("/" + strings.TrimSpace(rootPath))
 	requestedPath = path.Clean("/" + strings.TrimSpace(requestedPath))
 	return rootPath == "/" || requestedPath == rootPath || strings.HasPrefix(requestedPath, rootPath+"/")
+}
+
+func bucketVisible(rootPath, bucket string) bool {
+	for _, visible := range visibleS3Buckets(rootPath) {
+		if visible == bucket {
+			return true
+		}
+	}
+	return false
+}
+
+func scopedListPrefix(rootPath, bucket, requestedPrefix string) (string, bool) {
+	rootPath = path.Clean("/" + strings.TrimSpace(strings.ReplaceAll(rootPath, "\\", "/")))
+	bucketRoot := "/" + bucket
+	if rootPath == "/" || rootPath == bucketRoot {
+		return strings.TrimPrefix(requestedPrefix, "/"), true
+	}
+	if !strings.HasPrefix(rootPath, bucketRoot+"/") {
+		return "", false
+	}
+
+	boundPrefix := strings.TrimPrefix(rootPath, bucketRoot+"/")
+	requestedPrefix = strings.TrimPrefix(requestedPrefix, "/")
+	requestedPath := path.Clean("/" + requestedPrefix)
+	boundPath := path.Clean("/" + boundPrefix)
+	switch {
+	case requestedPath == "/", requestedPath == boundPath:
+		return boundPrefix, true
+	case strings.HasPrefix(requestedPath, boundPath+"/"):
+		return strings.TrimPrefix(requestedPath, "/"), true
+	case strings.HasPrefix(boundPath, requestedPath+"/"):
+		return boundPrefix, true
+	default:
+		return "", false
+	}
 }
 
 type listBucketResult struct {
