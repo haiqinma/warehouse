@@ -20,6 +20,7 @@ declare module 'element-plus' {
     inputPlaceholder?: string
     inputPattern?: RegExp
     inputErrorMessage?: string
+    dangerouslyUseHTMLString?: boolean
   }
 
   interface MessageBoxPromptResult {

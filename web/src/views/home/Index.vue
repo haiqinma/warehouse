@@ -5477,6 +5477,10 @@ onMounted(() => {
   }
 })
 
+function handleGroupsRefresh() {
+  groupStore.fetchGroups()
+}
+
 function handleExternalNavigate(event: Event) {
   const customEvent = event as CustomEvent<{
     view?: ViewKey
@@ -5524,6 +5528,7 @@ function handleAuthChanged(): void {
 
 onMounted(() => {
   window.addEventListener('warehouse:navigate', handleExternalNavigate as EventListener)
+  window.addEventListener('warehouse:groups-refresh', handleGroupsRefresh as EventListener)
   window.addEventListener('warehouse:upload-task-retry', handleUploadTaskRetryEvent as EventListener)
   window.addEventListener('warehouse:upload-task-open', handleUploadTaskOpenEvent as EventListener)
   window.addEventListener(AUTH_CHANGED_EVENT, handleAuthChanged as EventListener)
@@ -5531,6 +5536,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('warehouse:navigate', handleExternalNavigate as EventListener)
+  window.removeEventListener('warehouse:groups-refresh', handleGroupsRefresh as EventListener)
   window.removeEventListener('warehouse:upload-task-retry', handleUploadTaskRetryEvent as EventListener)
   window.removeEventListener('warehouse:upload-task-open', handleUploadTaskOpenEvent as EventListener)
   window.removeEventListener(AUTH_CHANGED_EVENT, handleAuthChanged as EventListener)
@@ -6487,10 +6493,7 @@ onBeforeUnmount(() => {
                 <el-tabs v-model="credentialTab" class="credential-tabs">
                   <el-tab-pane label="WebDAV 凭证" name="webdav">
                     <div class="credential-tab-head">
-                      <div class="key-summary">
-                        <span>总数：{{ accessKeys.length }}</span>
-                        <span>生效中：{{ accessKeys.filter(item => item.status === 'active').length }}</span>
-                      </div>
+                      <div class="card-subtitle">用于 Finder、Windows 网络位置、rclone 等 WebDAV 客户端</div>
                       <div class="user-actions">
                         <el-button size="small" @click="fetchAccessKeys(true)">刷新</el-button>
                         <el-button size="small" type="primary" @click="openAccessKeyDialogFromUserCenter">新建</el-button>
@@ -6498,70 +6501,56 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="credential-tab-body" v-loading="accessKeyLoading">
                       <el-empty v-if="!accessKeys.length && !accessKeyLoading" description="暂无 WebDAV 密钥" />
-                      <div v-else class="key-list">
-                        <div v-for="item in accessKeys" :key="item.id" class="key-item">
-                          <div class="key-main">
-                            <div class="key-title-row">
-                              <span class="key-title">{{ item.name }}</span>
-                              <el-tag size="small" :type="item.status === 'active' ? 'success' : 'info'">
-                                {{ item.status === 'active' ? '生效中' : '已撤销' }}
-                              </el-tag>
-                            </div>
-                            <div class="key-meta-row mono">ID: {{ item.keyId }}</div>
-                            <div class="key-meta-row">
-                              已绑定目录：{{ (item.bindingPaths || []).length }}
-                            </div>
-                            <div v-if="(item.bindingPaths || []).length" class="key-meta-row">
+                      <el-table v-else :data="accessKeys" size="small">
+                        <el-table-column prop="name" label="名称" min-width="160" />
+                        <el-table-column prop="keyId" label="Key ID" min-width="230">
+                          <template #default="{ row }"><span class="mono">{{ row.keyId }}</span></template>
+                        </el-table-column>
+                        <el-table-column label="绑定目录" min-width="220">
+                          <template #default="{ row }">
+                            <div v-if="(row.bindingPaths || []).length" class="key-meta-row">
                               <el-tag
-                                v-for="path in (item.bindingPaths || []).slice(0, 4)"
-                                :key="`${item.id}-${path}`"
+                                v-for="path in (row.bindingPaths || []).slice(0, 3)"
+                                :key="`${row.id}-${path}`"
                                 size="small"
                                 type="info"
                               >
                                 {{ path }}
                               </el-tag>
-                              <span v-if="(item.bindingPaths || []).length > 4" class="key-more-text">
-                                +{{ (item.bindingPaths || []).length - 4 }}
+                              <span v-if="(row.bindingPaths || []).length > 3" class="key-more-text">
+                                +{{ (row.bindingPaths || []).length - 3 }}
                               </span>
                             </div>
+                            <span v-else>-</span>
+                          </template>
+                        </el-table-column>
+                        <el-table-column label="权限" min-width="220">
+                          <template #default="{ row }">
                             <div class="key-meta-row">
-                              权限：
                               <el-tag
-                                v-for="permission in item.permissions"
-                                :key="`${item.id}-${permission}`"
+                                v-for="permission in row.permissions"
+                                :key="`${row.id}-${permission}`"
                                 size="small"
                                 type="info"
                               >
                                 {{ formatSharePermission(permission) }}
                               </el-tag>
                             </div>
-                            <div class="key-meta-row">
-                              最近使用：{{ item.lastUsedAt ? formatTime(item.lastUsedAt) : '-' }}
-                            </div>
-                          </div>
-                          <div class="key-actions">
-                            <el-button size="small" class="access-key-ghost-button" @click="copyAccessKeyValue(item.keyId, 'Key ID')">复制 ID</el-button>
-                            <el-button
-                              v-if="item.status === 'active'"
-                              size="small"
-                              text
-                              type="danger"
-                              @click="revokeAccessKey(item)"
-                            >
-                              撤销
-                            </el-button>
-                            <el-button
-                              v-else
-                              size="small"
-                              text
-                              type="danger"
-                              @click="deleteAccessKey(item)"
-                            >
-                              删除
-                            </el-button>
-                          </div>
-                        </div>
-                      </div>
+                          </template>
+                        </el-table-column>
+                        <el-table-column label="状态" width="100">
+                          <template #default="{ row }">
+                            <el-tag size="small" :type="row.status === 'active' ? 'success' : 'info'">{{ row.status === 'active' ? '生效中' : '已撤销' }}</el-tag>
+                          </template>
+                        </el-table-column>
+                        <el-table-column label="操作" width="160">
+                          <template #default="{ row }">
+                            <el-button text size="small" @click="copyAccessKeyValue(row.keyId, 'Key ID')">复制 ID</el-button>
+                            <el-button v-if="row.status === 'active'" text type="danger" size="small" @click="revokeAccessKey(row)">撤销</el-button>
+                            <el-button v-else text type="danger" size="small" @click="deleteAccessKey(row)">删除</el-button>
+                          </template>
+                        </el-table-column>
+                      </el-table>
                     </div>
                   </el-tab-pane>
                   <el-tab-pane label="S3 凭证" name="s3">
@@ -8337,42 +8326,6 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
-.key-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.key-item {
-  border: 1px solid #eef1f4;
-  border-radius: 12px;
-  padding: 12px;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.key-main {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.key-title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.key-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1f2d3d;
-}
-
 .key-meta-row {
   display: flex;
   align-items: center;
@@ -8385,14 +8338,6 @@ onBeforeUnmount(() => {
 .key-more-text {
   font-size: 12px;
   color: #909399;
-}
-
-.key-actions {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  flex-shrink: 0;
-  flex-wrap: wrap;
 }
 
 .access-key-dialog {
@@ -8778,17 +8723,9 @@ onBeforeUnmount(() => {
     white-space: normal;
   }
 
-  .key-item {
-    flex-direction: column;
-  }
-
   .selection-summary-bar {
     flex-direction: column;
     align-items: flex-start;
-  }
-
-  .key-actions {
-    align-items: center;
   }
 
   .access-key-created-row {

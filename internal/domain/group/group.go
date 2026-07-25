@@ -34,9 +34,9 @@ type Member struct {
 	UserID        string
 	GroupID       string
 	Name          string
+	Alias         string
 	Username      string
 	WalletAddress string
-	Tags          []string
 	Status        string
 	IsOwner       bool
 	CreatedAt     time.Time
@@ -56,21 +56,15 @@ func NewGroup(userID, name string) (*Group, error) {
 	}, nil
 }
 
-func NewMember(userID, groupID, name, walletAddress string, tags []string) (*Member, error) {
+func NewMember(userID, groupID, name, walletAddress string) (*Member, error) {
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
 		return nil, errors.New("group id is required")
-	}
-	if tags == nil {
-		tags = []string{}
 	}
 	name = strings.TrimSpace(name)
 	walletAddress = strings.TrimSpace(walletAddress)
 	if walletAddress == "" {
 		return nil, errors.New("wallet address is required")
-	}
-	if name == "" {
-		name = strings.ToLower(walletAddress)
 	}
 	now := time.Now()
 	return &Member{
@@ -79,7 +73,6 @@ func NewMember(userID, groupID, name, walletAddress string, tags []string) (*Mem
 		GroupID:       groupID,
 		Name:          name,
 		WalletAddress: strings.ToLower(walletAddress),
-		Tags:          tags,
 		Status:        MemberStatusActive,
 		CreatedAt:     now,
 	}, nil

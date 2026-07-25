@@ -33,16 +33,16 @@ func TestCreateByGroupsStoresDynamicGroupAudience(t *testing.T) {
 	}
 
 	groupRepo := newFakeGroupRepository()
-	groupSvc := NewGroupService(groupRepo)
+	groupSvc := NewGroupService(groupRepo, userRepo)
 	grp, err := groupSvc.CreateGroup(ctx, owner, "team")
 	if err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
-	member, err := groupSvc.CreateMember(ctx, owner, target.Username, target.WalletAddress, grp.ID, nil)
+	member, err := groupSvc.CreateMember(ctx, owner, CreateMemberInput{Target: target.WalletAddress, GroupID: grp.ID})
 	if err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
-	if err := groupSvc.ApproveMember(ctx, target, member.ID); err != nil {
+	if err := groupSvc.ApproveMember(ctx, target, member.ID, "Member Name"); err != nil {
 		t.Fatalf("ApproveMember: %v", err)
 	}
 
@@ -86,16 +86,16 @@ func TestResolveForTargetUsesCurrentGroupMembershipForHistoricalGroupShare(t *te
 	mustSaveUser(t, userRepo, target)
 
 	groupRepo := newFakeGroupRepository()
-	groupSvc := NewGroupService(groupRepo)
+	groupSvc := NewGroupService(groupRepo, userRepo)
 	grp, err := groupSvc.CreateGroup(ctx, owner, "team")
 	if err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
-	member, err := groupSvc.CreateMember(ctx, owner, target.Username, target.WalletAddress, grp.ID, nil)
+	member, err := groupSvc.CreateMember(ctx, owner, CreateMemberInput{Target: target.WalletAddress, GroupID: grp.ID})
 	if err != nil {
 		t.Fatalf("CreateMember: %v", err)
 	}
-	if err := groupSvc.ApproveMember(ctx, target, member.ID); err != nil {
+	if err := groupSvc.ApproveMember(ctx, target, member.ID, "Member Name"); err != nil {
 		t.Fatalf("ApproveMember: %v", err)
 	}
 

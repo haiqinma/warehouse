@@ -754,11 +754,11 @@ onBeforeUnmount(() => {
           <el-option
             v-for="member in groupMembers"
             :key="member.id"
-            :label="member.walletAddress"
+            :label="[member.alias, member.name, member.walletAddress].filter(Boolean).join(' ')"
             :value="member.walletAddress"
           >
             <div class="member-option" :title="member.walletAddress">
-              <span v-if="member.name" class="member-name">{{ member.name }}</span>
+              <span v-if="member.alias || member.name" class="member-name">{{ member.alias || member.name }}</span>
               <span class="member-address mono">{{ shortenAddress(member.walletAddress) }}</span>
             </div>
           </el-option>

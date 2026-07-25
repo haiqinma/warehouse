@@ -18,6 +18,7 @@ const (
 
 	TypeQuota       = "quota"
 	TypeShare       = "share"
+	TypeGroupInvite = "group_invite"
 	TypeSystem      = "system"
 	TypeAdminNotice = "admin_notice"
 )
@@ -25,6 +26,7 @@ const (
 var PreferenceTypes = []string{
 	TypeQuota,
 	TypeShare,
+	TypeGroupInvite,
 	TypeSystem,
 	TypeAdminNotice,
 }

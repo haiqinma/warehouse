@@ -5,6 +5,7 @@ import { showSuccess } from '@/utils/toast'
 
 type GroupSelectionFilter = 'all' | string
 type MemberStatus = 'active' | 'pending' | string
+type MemberEditMode = 'create' | 'name' | 'alias'
 
 function normalizeMemberStatus(status?: MemberStatus) {
   return String(status || 'active').trim().toLowerCase()
@@ -17,9 +18,8 @@ function isPendingMember(member: GroupMember) {
 function matchesMemberKeyword(member: GroupMember, keyword: string) {
   if (!keyword) return true
   if (member.name.toLowerCase().includes(keyword)) return true
-  if ((member.username || '').toLowerCase().includes(keyword)) return true
+  if ((member.alias || '').toLowerCase().includes(keyword)) return true
   if (member.walletAddress.toLowerCase().includes(keyword)) return true
-  if ((member.tags || []).some(tag => tag.toLowerCase().includes(keyword))) return true
   return false
 }
 
@@ -31,9 +31,7 @@ function isWalletAddressValue(value: string | undefined, walletAddress: string |
 
 function preferredMemberName(member: GroupMember) {
   const name = member.name?.trim()
-  const username = member.username?.trim()
   if (name && !isWalletAddressValue(name, member.walletAddress)) return name
-  if (username) return username
   return ''
 }
 
@@ -68,11 +66,12 @@ export const useGroupStore = defineStore('group', {
     groupSaving: false,
     memberForm: {
       id: '',
+      editMode: 'create' as MemberEditMode,
+      target: '',
       name: '',
-      username: '',
+      alias: '',
       walletAddress: '',
-      groupId: '',
-      tags: [] as string[]
+      groupId: ''
     },
     memberSaving: false,
     memberDialogVisible: false,
@@ -206,11 +205,12 @@ export const useGroupStore = defineStore('group', {
       const filter = this.selectedGroupId
       this.memberForm = {
         id: '',
+        editMode: 'create' as MemberEditMode,
+        target: '',
         name: '',
-        username: '',
+        alias: '',
         walletAddress: '',
-        groupId: filter !== 'all' ? filter : '',
-        tags: []
+        groupId: filter !== 'all' ? filter : ''
       }
     },
     openCreateMemberDialog() {
@@ -225,12 +225,21 @@ export const useGroupStore = defineStore('group', {
       this.memberDialogVisible = true
     },
     async submitMember() {
+      const target = this.memberForm.target.trim()
       const walletAddress = this.memberForm.walletAddress.trim()
-      const name = this.memberForm.name.trim() || this.memberForm.username.trim() || walletAddress
+      const name = this.memberForm.name.trim() || walletAddress
+      const alias = this.memberForm.alias.trim()
       const groupId = this.memberForm.groupId.trim()
-      const tags = Array.isArray(this.memberForm.tags) ? this.memberForm.tags : []
-      if (!walletAddress || !groupId) {
-        showError('请输入钱包地址并选择分组')
+      if (!groupId) {
+        showError('请选择分组')
+        return
+      }
+      if (!this.memberForm.id && !target) {
+        showError('请输入用户名或钱包地址')
+        return
+      }
+      if (this.memberForm.editMode === 'name' && !name) {
+        showError('请输入名称')
         return
       }
       this.memberSaving = true
@@ -238,17 +247,19 @@ export const useGroupStore = defineStore('group', {
         let savedMember: GroupMember | null = null
         const isEditing = Boolean(this.memberForm.id)
         if (this.memberForm.id) {
-          await groupApi.updateMember({
-            id: this.memberForm.id,
-            name,
-            tags
-          })
+          if (this.memberForm.editMode === 'name') {
+            await groupApi.updateMemberName({
+              id: this.memberForm.id,
+              name
+            })
+          } else {
+            await groupApi.updateMemberAlias({ id: this.memberForm.id, alias })
+          }
         } else {
           savedMember = await groupApi.createMember({
-            name,
-            walletAddress,
+            target,
             groupId,
-            tags
+            alias
           })
         }
         this.resetMemberForm()
@@ -268,11 +279,12 @@ export const useGroupStore = defineStore('group', {
     editMember(member: GroupMember) {
       this.memberForm = {
         id: member.id,
+        editMode: member.isSelf ? 'name' : 'alias',
+        target: '',
         name: preferredMemberName(member),
-        username: member.username || '',
+        alias: member.alias || '',
         walletAddress: member.walletAddress,
-        groupId: member.groupId,
-        tags: member.tags ? [...member.tags] : []
+        groupId: member.groupId
       }
       this.memberDialogVisible = true
     },

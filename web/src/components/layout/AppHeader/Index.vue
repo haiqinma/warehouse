@@ -1,8 +1,9 @@
 <script lang="ts" setup>
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
-import { Bell, Notebook, SwitchButton, Wallet } from '@element-plus/icons-vue'
+import { Bell, Check, Close, Notebook, SwitchButton, Wallet } from '@element-plus/icons-vue'
+import { ElMessageBox } from 'element-plus'
 import { storeToRefs } from 'pinia'
-import { notificationApi, type AdminNotificationCreatePayload, type NotificationItem, type NotificationPreferenceItem } from '@/api'
+import { groupApi, notificationApi, userApi, type AdminNotificationCreatePayload, type NotificationItem, type NotificationPreferenceItem } from '@/api'
 import { AUTH_CHANGED_EVENT, isLoggedIn, getCurrentAccount, logout, loginWithWallet, focusPendingWalletApproval, getWalletName, watchWalletAccounts, watchWalletProvider } from '@/plugins/auth'
 import { useUploadTaskStore } from '@/stores/uploadTaskStore'
 import UploadTaskListView from '@/views/home/components/UploadTaskListView.vue'
@@ -16,6 +17,7 @@ const notificationOpen = ref(false)
 const notificationLoading = ref(false)
 const notificationView = ref<'messages' | 'preferences' | 'announce'>('messages')
 const notifications = ref<NotificationItem[]>([])
+const notificationActionLoading = ref<Record<string, boolean>>({})
 const notificationPreferences = ref<Array<{ type: string; enabled: boolean }>>([])
 const unreadCount = ref(0)
 const uploadTaskStore = useUploadTaskStore()
@@ -237,7 +239,7 @@ function currentNotifications() {
 }
 
 function normalizePreferences(items: NotificationPreferenceItem[]) {
-  const labels = ['quota', 'share', 'system', 'admin_notice']
+  const labels = ['quota', 'share', 'group_invite', 'system', 'admin_notice']
   const byType = new Map<string, boolean>()
   items.forEach(item => {
     const type = item.type || item.Type || ''
@@ -253,6 +255,7 @@ function normalizePreferences(items: NotificationPreferenceItem[]) {
 function preferenceLabel(type: string): string {
   if (type === 'quota') return '额度提醒'
   if (type === 'share') return '分享提醒'
+  if (type === 'group_invite') return '分组邀请'
   if (type === 'system') return '系统提醒'
   if (type === 'admin_notice') return '管理员公告'
   return type
@@ -290,6 +293,98 @@ function notificationSeverityClass(severity: string): string {
   if (severity === 'error') return 'is-error'
   if (severity === 'warning') return 'is-warning'
   return 'is-info'
+}
+
+function groupInviteMemberId(item: NotificationItem): string {
+  const prefix = '#group-invite:'
+  const actionUrl = item.actionUrl || ''
+  return actionUrl.startsWith(prefix) ? actionUrl.slice(prefix.length).trim() : ''
+}
+
+function isGroupInviteNotification(item: NotificationItem): boolean {
+  return item.type === 'group_invite' && Boolean(groupInviteMemberId(item))
+}
+
+function parseGroupNameFromInvite(item: NotificationItem): string {
+  const matched = item.content.match(/「(.+?)」/)
+  return matched?.[1]?.trim() || '-'
+}
+
+function escapeHTML(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+async function promptGroupInviteName(item: NotificationItem, memberId: string): Promise<string> {
+  const [membersResult, groupsResult, userInfo] = await Promise.all([
+    groupApi.listMembers(),
+    groupApi.listGroups().catch(() => ({ items: [] })),
+    userApi.getInfo().catch(() => ({ username: '' }))
+  ])
+  const member = (membersResult.items || []).find(current => current.id === memberId)
+  const groupName = (groupsResult.items || []).find(group => group.id === member?.groupId)?.name || parseGroupNameFromInvite(item)
+  const walletAddress = member?.walletAddress || getCurrentAccount() || '-'
+  const defaultName = String(userInfo.username || '').trim()
+
+  const { value } = await ElMessageBox.prompt(
+    `<div class="group-invite-confirm">` +
+      `<div><span>钱包地址</span><strong>${escapeHTML(walletAddress)}</strong></div>` +
+      `<div><span>分组名称</span><strong>${escapeHTML(groupName)}</strong></div>` +
+      `<div><span>用户在分组中的名称</span></div>` +
+    `</div>`,
+    '确认加入分组',
+    {
+      confirmButtonText: '确认加入',
+      cancelButtonText: '取消',
+      inputValue: defaultName,
+      inputPlaceholder: '请输入你在分组中展示的名称',
+      inputPattern: /\S+/,
+      inputErrorMessage: '请输入名称',
+      closeOnClickModal: false,
+      dangerouslyUseHTMLString: true
+    }
+  )
+  return String(value || '').trim()
+}
+
+async function respondGroupInvite(item: NotificationItem, accepted: boolean, event?: MouseEvent) {
+  event?.stopPropagation()
+  event?.preventDefault()
+  const memberId = groupInviteMemberId(item)
+  if (!memberId) return
+
+  let memberName = ''
+  try {
+    if (accepted) {
+      memberName = await promptGroupInviteName(item, memberId)
+      if (!memberName) return
+    }
+  } catch {
+    return
+  }
+
+  notificationActionLoading.value = { ...notificationActionLoading.value, [item.id]: true }
+  try {
+    if (accepted) {
+      await groupApi.approveMember(memberId, memberName)
+    } else {
+      await groupApi.rejectMember(memberId)
+    }
+    await markNotificationRead(item)
+    notifications.value = notifications.value.filter(current => current.id !== item.id)
+    await refreshUnreadCounts()
+    window.dispatchEvent(new CustomEvent('warehouse:groups-refresh'))
+  } catch (error) {
+    console.warn(accepted ? '确认分组邀请失败:' : '拒绝分组邀请失败:', error)
+  } finally {
+    const next = { ...notificationActionLoading.value }
+    delete next[item.id]
+    notificationActionLoading.value = next
+  }
 }
 
 async function handleNotificationClick(item: NotificationItem) {
@@ -496,21 +591,43 @@ onBeforeUnmount(() => {
           <template v-if="notificationView === 'messages'">
             <div v-if="!currentNotifications().length" class="notification-empty">暂无消息</div>
             <div v-else class="notification-list">
-              <button
+              <div
                 v-for="item in currentNotifications()"
                 :key="item.id"
-                type="button"
+                role="button"
+                tabindex="0"
                 class="notification-item"
                 :class="[{ unread: !item.readAt }, notificationSeverityClass(item.severity)]"
                 @click="handleNotificationClick(item)"
+                @keydown.enter="handleNotificationClick(item)"
+                @keydown.space.prevent="handleNotificationClick(item)"
               >
                 <span class="notification-dot" />
                 <span class="notification-main">
                   <span class="notification-title">{{ item.title }}</span>
                   <span class="notification-content">{{ item.content }}</span>
+                  <span v-if="isGroupInviteNotification(item)" class="notification-actions">
+                    <el-button
+                      size="small"
+                      type="primary"
+                      :icon="Check"
+                      :loading="notificationActionLoading[item.id]"
+                      @click="respondGroupInvite(item, true, $event)"
+                    >
+                      确认
+                    </el-button>
+                    <el-button
+                      size="small"
+                      :icon="Close"
+                      :disabled="notificationActionLoading[item.id]"
+                      @click="respondGroupInvite(item, false, $event)"
+                    >
+                      拒绝
+                    </el-button>
+                  </span>
                   <span class="notification-time">{{ formatNotificationTime(item.createdAt) }}</span>
                 </span>
-              </button>
+              </div>
             </div>
           </template>
           <div v-else-if="notificationView === 'preferences'" class="notification-preferences">
@@ -822,6 +939,39 @@ onBeforeUnmount(() => {
 .notification-time {
   color: #a8abb2;
   font-size: 12px;
+}
+
+.notification-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+:global(.group-invite-confirm) {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: #606266;
+  font-size: 13px;
+}
+
+:global(.group-invite-confirm div) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+:global(.group-invite-confirm span) {
+  color: #909399;
+  font-size: 12px;
+}
+
+:global(.group-invite-confirm strong) {
+  color: #303133;
+  font-weight: 500;
+  word-break: break-all;
 }
 
 .notification-preferences {
