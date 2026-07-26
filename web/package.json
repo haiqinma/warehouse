@@ -10,7 +10,10 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
-    "format": "prettier --write \"src/**/*.ts\""
+    "format": "prettier --write \"src/**/*.ts\"",
+    "openapi:lint": "npx --yes --package @redocly/cli@2.12.2 --package yaml@2.8.2 redocly lint ../docs/openapi/warehouse.openapi.yaml --config ../redocly.yaml",
+    "openapi:generate": "npx --yes openapi-typescript@7.10.1 ../docs/openapi/warehouse.openapi.yaml -o src/api/generated/openapi.d.ts",
+    "openapi:check": "npm run openapi:lint && npm run openapi:generate && git diff --exit-code -- src/api/generated/openapi.d.ts"
   },
   "dependencies": {
     "@vueuse/core": "^13.1.0",
@@ -51,7 +54,7 @@
     "micromatch": {
       "picomatch": "^2.3.2"
     },
-    "postcss": "^8.5.16",
+    "postcss": "^8.5.23",
     "rollup": "^4.62.2"
   }
 }

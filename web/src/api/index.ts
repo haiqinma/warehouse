@@ -1,5 +1,8 @@
 // API 统一封装
 import { authFetch, getAccessToken } from '@yeying-community/web3-bs'
+import type { components as OpenAPIComponents } from './generated/openapi'
+
+type OpenAPISchema<Name extends keyof OpenAPIComponents['schemas']> = OpenAPIComponents['schemas'][Name]
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 const AUTH_BASE = API_BASE ? `${API_BASE.replace(/\/+$/, '')}/api/v1/public/auth` : '/api/v1/public/auth'
@@ -128,16 +131,7 @@ export const userApi = {
   }
 }
 
-export interface NotificationItem {
-  id: string
-  type: string
-  title: string
-  content: string
-  severity: 'info' | 'warning' | 'error'
-  actionUrl?: string
-  readAt?: string
-  createdAt: string
-}
+export type NotificationItem = OpenAPISchema<'Notification'>
 
 export interface NotificationPreferenceItem {
   Type?: string
@@ -244,15 +238,7 @@ export const assetsApi = {
 }
 
 // 回收站项目类型
-export interface RecycleItem {
-  hash: string
-  name: string
-  path: string        // 删除前的完整路径（相对于目录根）
-  size: number
-  deletedAt: string   // 删除时间
-  directory: string   // 所在目录
-  isDir?: boolean
-}
+export type RecycleItem = OpenAPISchema<'RecycleItem'>
 
 // 回收站 API
 export const recycleApi = {
@@ -295,17 +281,7 @@ export const recycleApi = {
 }
 
 // 分享项目类型
-export interface ShareItem {
-  token: string
-  name: string
-  path: string
-  mode: ShareMode
-  url: string
-  viewCount: number
-  downloadCount: number
-  expiresAt?: string
-  createdAt?: string
-}
+export type ShareItem = OpenAPISchema<'PublicShare'>
 
 export type ShareMode = 'download' | 'preview'
 
@@ -315,23 +291,7 @@ export interface ShareTargetGroup {
 }
 
 // 定向分享项目类型
-export interface DirectShareItem {
-  id: string
-  name: string
-  path: string
-  isDir: boolean
-  permissions: string[]
-  targetWallet?: string
-  targetType?: 'addresses' | 'groups' | 'all_users'
-  targetCount?: number
-  audienceCount?: number
-  targetGroups?: ShareTargetGroup[]
-  allUsers?: boolean
-  ownerWallet?: string
-  ownerName?: string
-  expiresAt?: string
-  createdAt: string
-}
+export type DirectShareItem = OpenAPISchema<'DirectedShare'>
 
 export type ShareExpiryUnit = 'minute' | 'hour' | 'day' | 'week' | 'month' | 'year'
 
@@ -359,17 +319,7 @@ export interface GroupMember {
 
 export type AccessKeyPermission = 'read' | 'create' | 'update' | 'delete'
 
-export interface WebDAVAccessKeyItem {
-  id: string
-  name: string
-  keyId: string
-  permissions: AccessKeyPermission[]
-  bindingPaths: string[]
-  status: 'active' | 'revoked' | string
-  createdAt: string
-  expiresAt?: string
-  lastUsedAt?: string
-}
+export type WebDAVAccessKeyItem = OpenAPISchema<'WebDAVAccessKey'>
 
 export interface CreateWebDAVAccessKeyPayload {
   name: string
@@ -382,15 +332,7 @@ export interface CreateWebDAVAccessKeyResult extends WebDAVAccessKeyItem {
   keySecret: string
 }
 
-export interface S3CredentialItem {
-  id: string
-  name: string
-  accessKeyId: string
-  rootPath: string
-  permissions: string
-  status: 'active' | 'revoked' | string
-  createdAt: string
-}
+export type S3CredentialItem = OpenAPISchema<'S3Credential'>
 
 export interface CreateS3CredentialResult extends S3CredentialItem {
   secret: string

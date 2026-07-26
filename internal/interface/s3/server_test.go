@@ -98,3 +98,45 @@ func TestHandleDeleteObjectsDeletesRequestedKeys(t *testing.T) {
 		t.Fatalf("unexpected errors: %+v", result.Errors)
 	}
 }
+
+func TestHandleDeleteObjectsEnforcesCredentialScopePerKey(t *testing.T) {
+	root := t.TempDir()
+	objects := service.NewObjectService(root)
+	owner := user.NewUser("alice", "alice")
+	for _, key := range []string{"project/allowed.txt", "private/denied.txt"} {
+		if _, err := objects.PutForUser(t.Context(), owner, "services", key, strings.NewReader(key)); err != nil {
+			t.Fatalf("put %s: %v", key, err)
+		}
+	}
+
+	server := &Server{objects: objects}
+	credential := &s3credential.Credential{
+		OwnerUserID: owner.ID,
+		RootPath:    "/services/project",
+		Permissions: "delete",
+	}
+	req := httptest.NewRequest("POST", "/services/?delete=", strings.NewReader(`<Delete><Object><Key>project/allowed.txt</Key></Object><Object><Key>private/denied.txt</Key></Object></Delete>`))
+	resp := httptest.NewRecorder()
+
+	server.handleDeleteObjects(resp, req, credential, owner, "services", "")
+
+	if resp.Code != 200 {
+		t.Fatalf("status = %d, want 200", resp.Code)
+	}
+	if _, err := objects.Stat(t.Context(), owner.Directory, "services", "project/allowed.txt"); err == nil {
+		t.Fatal("expected scoped object to be deleted")
+	}
+	if _, err := objects.Stat(t.Context(), owner.Directory, "services", "private/denied.txt"); err != nil {
+		t.Fatalf("expected out-of-scope object to remain: %v", err)
+	}
+	var result deleteObjectsResult
+	if err := xml.Unmarshal(resp.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(result.Deleted) != 1 || result.Deleted[0].Key != "project/allowed.txt" {
+		t.Fatalf("unexpected deleted response: %+v", result.Deleted)
+	}
+	if len(result.Errors) != 1 || result.Errors[0].Key != "private/denied.txt" || result.Errors[0].Code != "AccessDenied" {
+		t.Fatalf("unexpected error response: %+v", result.Errors)
+	}
+}
