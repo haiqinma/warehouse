@@ -155,11 +155,17 @@ func (s *NotificationService) EnsureGroupInviteNotifications(ctx context.Context
 			continue
 		}
 		groupName := ""
+		inviterName := ""
 		grp, err := s.groupRepo.GetVisibleGroupByID(ctx, u.ID, u.WalletAddress, member.GroupID)
 		if err == nil && grp != nil {
 			groupName = grp.Name
+			if s.userRepo != nil {
+				if inviter, findErr := s.userRepo.FindByID(ctx, grp.UserID); findErr == nil && inviter != nil {
+					inviterName = displayUserName(inviter)
+				}
+			}
 		}
-		if err := s.upsertGroupInvite(ctx, u.ID, groupName, member.ID); err != nil {
+		if err := s.upsertGroupInvite(ctx, u.ID, inviterName, groupName, member.ID); err != nil {
 			return err
 		}
 	}
@@ -174,7 +180,7 @@ func (s *NotificationService) NotifyGroupInvite(ctx context.Context, inviter *us
 	if err != nil || target == nil || target.ID == inviter.ID {
 		return
 	}
-	if err := s.upsertGroupInvite(ctx, target.ID, groupName, member.ID); err != nil && s.logger != nil {
+	if err := s.upsertGroupInvite(ctx, target.ID, displayUserName(inviter), groupName, member.ID); err != nil && s.logger != nil {
 		s.logger.Warn("failed to create group invite notification",
 			zap.String("member_id", member.ID),
 			zap.Error(err))
@@ -413,10 +419,15 @@ func (s *NotificationService) NotifyShareCreated(ctx context.Context, owner *use
 	}
 }
 
-func (s *NotificationService) upsertGroupInvite(ctx context.Context, userID, groupName, memberID string) error {
+func (s *NotificationService) upsertGroupInvite(ctx context.Context, userID, inviterName, groupName, memberID string) error {
+	inviterName = strings.TrimSpace(inviterName)
 	groupName = strings.TrimSpace(groupName)
 	if groupName == "" {
 		groupName = "未命名分组"
+	}
+	content := fmt.Sprintf("你被邀请加入分组「%s」，请确认是否加入。", groupName)
+	if inviterName != "" {
+		content = fmt.Sprintf("%s 邀请你加入分组「%s」，请确认是否加入。", inviterName, groupName)
 	}
 	memberID = strings.TrimSpace(memberID)
 	if userID == "" || memberID == "" {
@@ -427,11 +438,21 @@ func (s *NotificationService) upsertGroupInvite(ctx context.Context, userID, gro
 		RecipientRole:   notification.RecipientRoleUser,
 		Type:            notification.TypeGroupInvite,
 		Title:           "收到分组邀请",
-		Content:         fmt.Sprintf("你被邀请加入分组「%s」，请确认是否加入。", groupName),
+		Content:         content,
 		Severity:        notification.SeverityInfo,
 		ActionURL:       groupInviteActionURL(memberID),
 		DedupeKey:       fmt.Sprintf("group:invite:%s:%s", memberID, userID),
 	})
+}
+
+func displayUserName(u *user.User) string {
+	if u == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(u.Username); name != "" {
+		return name
+	}
+	return strings.TrimSpace(u.WalletAddress)
 }
 
 func isPendingInviteForUser(u *user.User, member *group.Member) bool {
