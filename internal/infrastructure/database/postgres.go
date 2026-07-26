@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -14,6 +15,12 @@ import (
 type PostgresDB struct {
 	DB *sql.DB
 }
+
+const (
+	schemaMigrationLockID              int64 = 846273910527
+	notificationDedupeMigrationVersion       = "2026072601"
+	notificationDedupeMigrationName          = "notification_dedupe_partial_unique_index"
+)
 
 // NewPostgresDB 创建 PostgreSQL 数据库连接
 func NewPostgresDB(cfg config.DatabaseConfig) (*PostgresDB, error) {
@@ -505,25 +512,6 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 			WHERE recipient_user_id IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_role_unread
 			ON notifications(recipient_role, read_at)`,
-		`WITH duplicate_notifications AS (
-			SELECT
-				id,
-				dedupe_key,
-				ROW_NUMBER() OVER (
-					PARTITION BY dedupe_key
-					ORDER BY created_at DESC, id DESC
-				) AS row_number
-			FROM notifications
-			WHERE dedupe_key IS NOT NULL
-		)
-		UPDATE notifications n
-		SET dedupe_key = n.dedupe_key || ':legacy:' || n.id
-		FROM duplicate_notifications d
-		WHERE n.id = d.id AND d.row_number > 1`,
-		`DROP INDEX IF EXISTS idx_notifications_dedupe_key`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedupe_key
-			ON notifications(dedupe_key)
-			WHERE dedupe_key IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_notification_preferences_user
 			ON notification_preferences(user_id)`,
 
@@ -642,10 +630,34 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 	}
 	defer tx.Rollback()
 
+	// 多实例共用数据库时只允许一个实例执行结构升级，其他实例等待事务完成。
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, schemaMigrationLockID); err != nil {
+		return fmt.Errorf("failed to acquire schema migration lock: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version VARCHAR(50) PRIMARY KEY,
+		name VARCHAR(255) NOT NULL,
+		applied_at TIMESTAMP NOT NULL DEFAULT NOW()
+	)`); err != nil {
+		return fmt.Errorf("failed to initialize schema migration history: %w", err)
+	}
+
 	for _, query := range queries {
 		if _, err := tx.ExecContext(ctx, query); err != nil {
 			return fmt.Errorf("failed to execute migration query: %w", err)
 		}
+	}
+
+	if err := ensureNotificationDedupeConstraint(ctx, tx); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, name)
+		VALUES ($1, $2)
+		ON CONFLICT (version) DO UPDATE SET name = EXCLUDED.name`,
+		notificationDedupeMigrationVersion,
+		notificationDedupeMigrationName,
+	); err != nil {
+		return fmt.Errorf("failed to record notification schema migration: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -653,4 +665,95 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+type notificationConstraintQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+type notificationConstraintDB interface {
+	notificationConstraintQuerier
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func ensureNotificationDedupeConstraint(ctx context.Context, db notificationConstraintDB) error {
+	valid, err := notificationDedupeConstraintValid(ctx, db)
+	if err != nil {
+		return fmt.Errorf("failed to inspect notification dedupe constraint: %w", err)
+	}
+	if valid {
+		return nil
+	}
+
+	queries := []string{
+		`WITH duplicate_notifications AS (
+			SELECT
+				id,
+				dedupe_key,
+				ROW_NUMBER() OVER (
+					PARTITION BY dedupe_key
+					ORDER BY created_at DESC, id DESC
+				) AS row_number
+			FROM notifications
+			WHERE dedupe_key IS NOT NULL
+		)
+		UPDATE notifications n
+		SET dedupe_key = n.dedupe_key || ':legacy:' || n.id
+		FROM duplicate_notifications d
+		WHERE n.id = d.id AND d.row_number > 1`,
+		`DROP INDEX IF EXISTS idx_notifications_dedupe_key`,
+		`CREATE UNIQUE INDEX idx_notifications_dedupe_key
+			ON notifications(dedupe_key)
+			WHERE dedupe_key IS NOT NULL`,
+	}
+	for _, query := range queries {
+		if _, err := db.ExecContext(ctx, query); err != nil {
+			return fmt.Errorf("failed to repair notification dedupe constraint: %w", err)
+		}
+	}
+	return verifyNotificationDedupeConstraint(ctx, db)
+}
+
+func notificationDedupeConstraintValid(ctx context.Context, db notificationConstraintQuerier) (bool, error) {
+	unique, columnName, predicate, err := loadNotificationDedupeConstraint(ctx, db)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	normalizedPredicate := strings.ToLower(strings.Join(strings.Fields(predicate), " "))
+	return unique && columnName == "dedupe_key" && strings.Contains(normalizedPredicate, "dedupe_key") && strings.Contains(normalizedPredicate, "is not null"), nil
+}
+
+// verifyNotificationDedupeConstraint prevents the service from becoming ready with a
+// notification schema that cannot satisfy UpsertByDedupeKey's ON CONFLICT target.
+func verifyNotificationDedupeConstraint(ctx context.Context, db notificationConstraintQuerier) error {
+	valid, err := notificationDedupeConstraintValid(ctx, db)
+	if err != nil {
+		return fmt.Errorf("failed to verify notification dedupe constraint: %w", err)
+	}
+	if !valid {
+		return fmt.Errorf("notification dedupe constraint is incompatible: expected UNIQUE (dedupe_key) WHERE dedupe_key IS NOT NULL")
+	}
+	return nil
+}
+
+func loadNotificationDedupeConstraint(ctx context.Context, db notificationConstraintQuerier) (bool, string, string, error) {
+	var unique bool
+	var columnName string
+	var predicate string
+	err := db.QueryRowContext(ctx, `
+		SELECT i.indisunique, a.attname, COALESCE(pg_get_expr(i.indpred, i.indrelid), '')
+		FROM pg_class idx
+		JOIN pg_index i ON i.indexrelid = idx.oid
+		JOIN pg_class tbl ON tbl.oid = i.indrelid
+		JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+		JOIN pg_attribute a ON a.attrelid = tbl.oid AND a.attnum = i.indkey[0]
+		WHERE ns.nspname = current_schema()
+			AND tbl.relname = 'notifications'
+			AND idx.relname = 'idx_notifications_dedupe_key'
+			AND i.indnatts = 1
+	`).Scan(&unique, &columnName, &predicate)
+	return unique, columnName, predicate, err
 }

@@ -66,6 +66,52 @@ func TestNotificationServiceEnsuresPendingGroupInviteForCurrentUser(t *testing.T
 	if !strings.Contains(item.Content, "test_01") {
 		t.Fatalf("notification content = %q, want group name", item.Content)
 	}
+	if !strings.Contains(item.Content, owner.Username) {
+		t.Fatalf("notification content = %q, want inviter username", item.Content)
+	}
+}
+
+func TestNotificationServiceDismissesInviteAfterApproveAndReject(t *testing.T) {
+	ctx := context.Background()
+	for _, accepted := range []bool{true, false} {
+		t.Run(map[bool]string{true: "approve", false: "reject"}[accepted], func(t *testing.T) {
+			groupRepo := newFakeGroupRepository()
+			notificationRepo := newFakeNotificationRepository()
+			userRepo := newTestUserRepo()
+			svc := NewNotificationService(notificationRepo, userRepo, nil)
+			svc.SetGroupRepository(groupRepo)
+			groupSvc := NewGroupService(groupRepo, userRepo)
+			groupSvc.SetNotificationService(svc)
+
+			owner := &user.User{ID: "owner-user", Username: "owner", WalletAddress: "0x1111111111111111111111111111111111111111"}
+			invited := &user.User{ID: "invited-user", Username: "invited", WalletAddress: "0x2222222222222222222222222222222222222222"}
+			_ = userRepo.Save(ctx, owner)
+			_ = userRepo.Save(ctx, invited)
+			grp, _ := groupSvc.CreateGroup(ctx, owner, "team")
+			member, err := groupSvc.CreateMember(ctx, owner, CreateMemberInput{Target: invited.WalletAddress, GroupID: grp.ID})
+			if err != nil {
+				t.Fatalf("CreateMember() error = %v", err)
+			}
+			if _, err := svc.UnreadCountForUser(ctx, invited); err != nil {
+				t.Fatalf("UnreadCountForUser() error = %v", err)
+			}
+			if accepted {
+				err = groupSvc.ApproveMember(ctx, invited, member.ID, invited.Username)
+			} else {
+				err = groupSvc.RejectMember(ctx, invited, member.ID)
+			}
+			if err != nil {
+				t.Fatalf("respond invite error = %v", err)
+			}
+			items, err := svc.ListForUser(ctx, invited, 20)
+			if err != nil {
+				t.Fatalf("ListForUser() error = %v", err)
+			}
+			if len(items) != 0 {
+				t.Fatalf("ListForUser() returned %d active notifications, want 0", len(items))
+			}
+		})
+	}
 }
 
 type fakeNotificationRepository struct {

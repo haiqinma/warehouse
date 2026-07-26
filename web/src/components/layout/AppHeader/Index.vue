@@ -1,7 +1,7 @@
 <script lang="ts" setup>
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { Bell, Check, Close, Notebook, SwitchButton, Wallet } from '@element-plus/icons-vue'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import { groupApi, notificationApi, userApi, type AdminNotificationCreatePayload, type NotificationItem, type NotificationPreferenceItem } from '@/api'
 import { AUTH_CHANGED_EVENT, isLoggedIn, getCurrentAccount, logout, loginWithWallet, focusPendingWalletApproval, getWalletName, watchWalletAccounts, watchWalletProvider } from '@/plugins/auth'
@@ -378,8 +378,13 @@ async function respondGroupInvite(item: NotificationItem, accepted: boolean, eve
     notifications.value = notifications.value.filter(current => current.id !== item.id)
     await refreshUnreadCounts()
     window.dispatchEvent(new CustomEvent('warehouse:groups-refresh'))
-  } catch (error) {
+    ElMessage({ message: accepted ? '已加入分组' : '已拒绝分组邀请', type: 'success' })
+  } catch (error: any) {
     console.warn(accepted ? '确认分组邀请失败:' : '拒绝分组邀请失败:', error)
+    ElMessage({
+      message: error?.message || (accepted ? '确认分组邀请失败' : '拒绝分组邀请失败'),
+      type: 'error'
+    })
   } finally {
     const next = { ...notificationActionLoading.value }
     delete next[item.id]
