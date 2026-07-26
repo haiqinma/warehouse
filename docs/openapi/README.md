@@ -6,7 +6,7 @@
 
 - OpenAPI 描述 `/api/v1/public/*` 和后续纳入的 `/api/v1/admin/*` JSON API。
 - WebDAV `/dav/*` 的协议方法、请求头和客户端配置继续由 Markdown 使用指南维护。
-- 独立 S3 Endpoint 的 Signature V4、bucket/key 和兼容操作由 [S3 现状与演进](../S3现状与演进.md) 维护。
+- 独立 S3 Endpoint 的 Signature V4、bucket/key 和兼容操作由 [S3 设计方案](../S3设计方案.md) 维护。
 - 不对外发布 `/api/v1/internal/*` 内部复制 API。
 
 ## 当前覆盖范围
@@ -34,7 +34,7 @@
 
 `/api/v1/public/webdav/address/*` 历史别名已从 Router 移除，调用方必须使用 OpenAPI 中的 `/api/v1/public/webdav/group/*` 路径。
 
-`/api/v1/internal/*` 内部复制接口按设计不进入对外规范；WebDAV 协议操作由用户使用指南维护，独立 S3 Endpoint 的协议操作由 [S3 现状与演进](../S3现状与演进.md) 维护。新增或修改对外 HTTP API 时，必须同步修改 OpenAPI。
+`/api/v1/internal/*` 内部复制接口按设计不进入对外规范；WebDAV 协议操作由用户使用指南维护，独立 S3 Endpoint 的协议操作由 [S3 设计方案](../S3设计方案.md) 维护。新增或修改对外 HTTP API 时，必须同步修改 OpenAPI。
 
 ## 校验和预览
 

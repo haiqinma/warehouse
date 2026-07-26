@@ -2,13 +2,12 @@ openapi: 3.1.0
 info:
   title: Warehouse HTTP API
   version: 1.0.0
-  summary: Warehouse JSON HTTP API contract
   description: |
     Warehouse 对外 JSON HTTP API 的正式契约。
 
     WebDAV (`/dav/*`) 和独立 S3 Endpoint 是协议适配层，不在本 OpenAPI
     规范中逐操作重复定义。WebDAV 请参阅用户使用指南，S3 请参阅
-    `docs/S3现状与演进.md`。
+    `docs/S3设计方案.md`。
 servers:
   - url: https://warehouse.tidukongjian.com
     description: Production
