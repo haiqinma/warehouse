@@ -130,6 +130,12 @@ cors:
   enabled: true
   credentials: true
   allowed_origins:
+    # Tauri desktop app origin. Required when the packaged Chat app calls
+    # Warehouse/WebDAV directly for cloud storage checks and sync.
+    - "tauri://localhost"
+    # Central UCAN desktop callback origin. Keep this only if the callback
+    # flow may call Warehouse before returning to the main Tauri window.
+    - "http://tauri.localhost"
     - "http://localhost:3000"
     - "https://your-domain.com"
   allowed_methods:
