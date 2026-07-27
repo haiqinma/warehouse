@@ -128,6 +128,15 @@ curl http://127.0.0.1:6065/api/v1/public/health/heartbeat
 curl http://127.0.0.1:6065/api/v1/public/health/readiness
 ```
 
+正式安装包由 `scripts/starter.sh` 启动后，使用统一健康检查脚本：
+
+```bash
+./scripts/health-check.sh
+./scripts/health-check.sh --level all --format json
+```
+
+脚本默认读取项目目录下的 `config.yaml`，没有该文件时读取 `config.yaml.template`；也可以通过 `--base-url` 或 `HEALTH_BASE_URL` 指定服务地址。默认层级是 `readiness`。健康检查会强制检查 `run/warehouse.pid` 对应的进程是否存在且不是僵尸进程，因此不用于没有 PID 文件的 `go run` 开发方式。
+
 CLI readiness 检查：
 
 ```bash
@@ -229,6 +238,11 @@ cd ..
 - 健康检查接口：
   - `GET /api/v1/public/health/heartbeat`
   - `GET /api/v1/public/health/readiness`
+- 正式安装包统一健康检查脚本（由 `starter.sh` 启动并生成 PID 文件后）：
+  - `scripts/health-check.sh --level liveness`
+  - `scripts/health-check.sh --level readiness`
+  - `scripts/health-check.sh --level dependency`
+  - `scripts/health-check.sh --level all --format json`
 - WebDAV 基本操作：
   - `MKCOL`
   - `PUT`
