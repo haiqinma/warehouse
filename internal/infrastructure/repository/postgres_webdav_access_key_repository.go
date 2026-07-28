@@ -12,6 +12,7 @@ import (
 
 type WebDAVAccessKeyRepository interface {
 	Create(ctx context.Context, item *accesskey.WebDAVAccessKey) error
+	CreateWithBinding(ctx context.Context, item *accesskey.WebDAVAccessKey, rootPath string) error
 	ListByOwner(ctx context.Context, ownerUserID string) ([]*accesskey.WebDAVAccessKey, error)
 	GetByID(ctx context.Context, ownerUserID, id string) (*accesskey.WebDAVAccessKey, error)
 	FindByKeyID(ctx context.Context, keyID string) (*accesskey.WebDAVAccessKey, error)
@@ -20,6 +21,44 @@ type WebDAVAccessKeyRepository interface {
 	RevokeByID(ctx context.Context, ownerUserID, id string) error
 	DeleteRevokedByID(ctx context.Context, ownerUserID, id string) error
 	TouchByID(ctx context.Context, id string, usedAt time.Time) error
+}
+
+func (r *PostgresWebDAVAccessKeyRepository) CreateWithBinding(ctx context.Context, item *accesskey.WebDAVAccessKey, rootPath string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin webdav access key transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	query := `
+		INSERT INTO webdav_access_keys (
+			id, owner_user_id, name, key_id, secret_hash, root_path, permissions, status, expires_at, last_used_at, created_at, updated_at
+		)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+	`
+	_, err = tx.ExecContext(ctx, query,
+		item.ID, item.OwnerUserID, item.Name, item.KeyID, item.SecretHash, rootPath,
+		strings.ToUpper(strings.TrimSpace(item.Permissions)), item.Status, item.ExpiresAt,
+		item.LastUsedAt, item.CreatedAt, item.UpdatedAt,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "idx_webdav_access_keys_owner_name") {
+			return accesskey.ErrDuplicateName
+		}
+		return fmt.Errorf("failed to create webdav access key: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO webdav_access_key_bindings (access_key_id, owner_user_id, root_path, created_at)
+		VALUES ($1, $2, $3, NOW())
+	`, item.ID, item.OwnerUserID, rootPath)
+	if err != nil {
+		return fmt.Errorf("failed to create webdav access key binding: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit webdav access key transaction: %w", err)
+	}
+	return nil
 }
 
 type PostgresWebDAVAccessKeyRepository struct {

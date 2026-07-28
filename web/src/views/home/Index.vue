@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed, watch, defineAsyncComponent, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
-import { ArrowLeft, ArrowUp, Delete, Expand, Fold, FolderAdd, FolderOpened, Grid, Refresh, Upload, DocumentCopy, Share, Search, MoreFilled, Notebook, User, Lock, Unlock } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, ArrowUp, Delete, Expand, Fold, Folder, FolderAdd, FolderOpened, Grid, Refresh, Upload, DocumentCopy, Share, Search, MoreFilled, Notebook, User, Lock, Unlock } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { getSupportedCipherSuites, type CipherSuiteInfo } from '@yeying-community/web3-bs'
 import { quotaApi, userApi, recycleApi, shareApi, directShareApi, assetsApi, webdavAccessKeyApi, s3CredentialApi, adminUserApi, type RecycleItem, type ShareItem, type DirectShareItem, type AssetSpaceInfo, type ShareExpiryUnit, type ShareMode, type AccessKeyPermission, type WebDAVAccessKeyItem, type CreateWebDAVAccessKeyResult, type S3CredentialItem, type CreateS3CredentialResult, type AdminUserItem } from '@/api'
@@ -156,6 +156,10 @@ const accessKeyScopeLocked = ref(false)
 const accessKeyBindTargetID = ref('')
 const accessKeys = ref<WebDAVAccessKeyItem[]>([])
 const accessKeyCreateResult = ref<CreateWebDAVAccessKeyResult | null>(null)
+const accessKeyDirectoryPickerVisible = ref(false)
+const accessKeyDirectoryPickerLoading = ref(false)
+const accessKeyDirectoryPickerPath = ref('/personal')
+const accessKeyDirectoryPickerItems = ref<FileItem[]>([])
 const s3CredentialLoading = ref(false)
 const s3CredentialSubmitting = ref(false)
 const s3CredentialDialogVisible = ref(false)
@@ -277,6 +281,7 @@ type ShareLinkForm = ShareExpiryForm & {
 }
 type AccessKeyForm = ShareExpiryForm & {
   name: string
+  rootPath: string
   permissions: AccessKeyPermission[]
 }
 type DirectShareRelation = 'owned' | 'received'
@@ -484,6 +489,20 @@ const searchPlaceholder = computed(() => {
 const currentAssetSpace = computed(() => resolveAssetSpaceByPath(currentPath.value))
 const currentAssetSpaceKey = computed(() => currentAssetSpace.value?.key || '')
 const fileParentRootPath = computed(() => normalizeDirectoryPath(currentAssetSpace.value?.path || '/'))
+const accessKeyDirectoryPickerBreadcrumbs = computed(() => {
+  const current = normalizeAccessKeyRootPath(accessKeyDirectoryPickerPath.value)
+  const space = resolveAssetSpaceByPath(current)
+  if (!space) return []
+  const root = normalizeAccessKeyRootPath(space.path)
+  const relative = current.slice(root.length).split('/').filter(Boolean)
+  const breadcrumbs = [{ label: space.name, path: root }]
+  let accumulated = root
+  for (const segment of relative) {
+    accumulated = normalizeAccessKeyRootPath(`${accumulated}/${segment}`)
+    breadcrumbs.push({ label: segment, path: accumulated })
+  }
+  return breadcrumbs
+})
 const canGoFileParent = computed(() => {
   const current = normalizePathForSpaceMatch(currentPath.value)
   const root = normalizePathForSpaceMatch(fileParentRootPath.value)
@@ -1541,9 +1560,9 @@ function normalizeAccessKeyRootPath(rawPath: string): string {
 }
 
 function createDefaultAccessKeyForm(rootPath = '/'): AccessKeyForm {
-  void rootPath
   return {
     name: '',
+    rootPath: normalizeAccessKeyRootPath(rootPath),
     permissions: ['read'],
     ...createDefaultShareExpiryForm()
   }
@@ -2012,7 +2031,64 @@ function openAccessKeyDialogFromDirectory(item: FileItem) {
 }
 
 function openAccessKeyDialogFromUserCenter() {
-  openAccessKeyDialog('/', false)
+  const current = normalizeAccessKeyRootPath(currentPath.value)
+  const defaultScope = resolveAssetSpaceByPath(current)?.path || getDefaultAssetSpace()?.path || '/personal'
+  openAccessKeyDialog(current !== '/' ? current : defaultScope, false)
+}
+
+function openAccessKeyCreateForCurrentScope() {
+  openAccessKeyDialog(accessKeyScopePath.value, false)
+}
+
+async function loadAccessKeyDirectoryPicker(path: string) {
+  const normalized = normalizeAccessKeyRootPath(path)
+  if (!resolveAssetSpaceByPath(normalized)) {
+    showError('只能选择资产空间内的目录')
+    return
+  }
+  accessKeyDirectoryPickerLoading.value = true
+  try {
+    const token = localStorage.getItem('authToken') || ''
+    const response = await fetch(buildDavPath(normalized), {
+      method: 'PROPFIND',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/xml',
+        'Depth': '1'
+      }
+    })
+    if (!response.ok) {
+      throw new Error(`目录读取失败（HTTP ${response.status}）`)
+    }
+    const xml = await response.text()
+    accessKeyDirectoryPickerPath.value = normalized
+    accessKeyDirectoryPickerItems.value = parsePropfindResponse(xml, normalized, DAV_PREFIX)
+      .filter(item => item.isDir && !isEncryptedDirectoryMetadataFileName(item.name))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+  } catch (error: any) {
+    console.error('读取密钥授权目录失败:', error)
+    showError(error?.message || '读取目录失败')
+  } finally {
+    accessKeyDirectoryPickerLoading.value = false
+  }
+}
+
+function openAccessKeyDirectoryPicker() {
+  const selected = normalizeAccessKeyRootPath(accessKeyForm.value.rootPath)
+  const initial = resolveAssetSpaceByPath(selected)?.path
+    ? selected
+    : (getDefaultAssetSpace()?.path || '/personal')
+  accessKeyDirectoryPickerVisible.value = true
+  void loadAccessKeyDirectoryPicker(initial)
+}
+
+function enterAccessKeyDirectoryPickerItem(item: FileItem) {
+  if (item.isDir) void loadAccessKeyDirectoryPicker(item.path)
+}
+
+function selectAccessKeyDirectoryPickerPath() {
+  accessKeyForm.value.rootPath = normalizeAccessKeyRootPath(accessKeyDirectoryPickerPath.value)
+  accessKeyDirectoryPickerVisible.value = false
 }
 
 function adminUserUsageRate(item: AdminUserItem): number | null {
@@ -2146,6 +2222,11 @@ async function submitAccessKey() {
     showError('请至少选择一个权限')
     return
   }
+  const rootPath = normalizeAccessKeyRootPath(accessKeyForm.value.rootPath)
+  if (!rootPath) {
+    showError('请输入目录范围')
+    return
+  }
   const expiryPayload = resolveShareExpiryPayload(accessKeyForm.value)
   if (!expiryPayload) return
 
@@ -2153,6 +2234,7 @@ async function submitAccessKey() {
   try {
     const data = await webdavAccessKeyApi.create({
       name,
+      rootPath,
       permissions: accessKeyForm.value.permissions,
       ...expiryPayload
     })
@@ -6893,7 +6975,7 @@ onBeforeUnmount(() => {
                 </div>
                 <div v-else class="access-key-empty">
                   <span>没有可授权的生效密钥</span>
-                  <el-button class="access-key-ghost-button" @click="openAccessKeyDialogFromUserCenter">去新建密钥</el-button>
+                  <el-button class="access-key-ghost-button" @click="openAccessKeyCreateForCurrentScope">为当前目录新建密钥</el-button>
                 </div>
               </div>
             </div>
@@ -6902,6 +6984,15 @@ onBeforeUnmount(() => {
             <el-form label-position="top" class="access-key-form">
               <el-form-item label="密钥名称">
                 <el-input v-model="accessKeyForm.name" placeholder="例如：同步工具只读密钥" />
+              </el-form-item>
+              <el-form-item label="目录范围">
+                <div class="access-key-directory-field">
+                  <el-input v-model="accessKeyForm.rootPath" readonly />
+                  <el-button @click="openAccessKeyDirectoryPicker">选择目录</el-button>
+                </div>
+                <div class="access-key-permission-help">
+                  密钥覆盖所选目录及其全部子目录。请按最小权限原则选择实际需要的目录。
+                </div>
               </el-form-item>
               <el-form-item label="权限">
                 <el-checkbox-group v-model="accessKeyForm.permissions">
@@ -6952,6 +7043,59 @@ onBeforeUnmount(() => {
         <template #footer>
           <el-button @click="closeAccessKeyDialog">关闭</el-button>
           <el-button v-if="!accessKeyScopeLocked" type="primary" :loading="accessKeySubmitting" @click="submitAccessKey">创建密钥</el-button>
+        </template>
+      </el-dialog>
+      <el-dialog
+        v-model="accessKeyDirectoryPickerVisible"
+        title="选择 WebDAV 授权目录"
+        width="620px"
+        append-to-body
+      >
+        <div class="access-key-directory-picker">
+          <div class="access-key-directory-spaces">
+            <el-button
+              v-for="space in normalizeAssetSpaces(assetSpaces)"
+              :key="space.key"
+              size="small"
+              :type="resolveAssetSpaceByPath(accessKeyDirectoryPickerPath)?.key === space.key ? 'primary' : 'default'"
+              @click="loadAccessKeyDirectoryPicker(space.path)"
+            >
+              {{ space.name }}
+            </el-button>
+          </div>
+          <el-breadcrumb separator="/" class="access-key-directory-breadcrumb">
+            <el-breadcrumb-item
+              v-for="crumb in accessKeyDirectoryPickerBreadcrumbs"
+              :key="crumb.path"
+            >
+              <el-button text @click="loadAccessKeyDirectoryPicker(crumb.path)">{{ crumb.label }}</el-button>
+            </el-breadcrumb-item>
+          </el-breadcrumb>
+          <div v-loading="accessKeyDirectoryPickerLoading" class="access-key-directory-list">
+            <button
+              v-for="item in accessKeyDirectoryPickerItems"
+              :key="item.path"
+              type="button"
+              class="access-key-directory-item"
+              @click="enterAccessKeyDirectoryPickerItem(item)"
+            >
+              <el-icon><Folder /></el-icon>
+              <span>{{ item.name }}</span>
+              <el-icon class="access-key-directory-arrow"><ArrowRight /></el-icon>
+            </button>
+            <el-empty
+              v-if="!accessKeyDirectoryPickerLoading && !accessKeyDirectoryPickerItems.length"
+              description="当前目录没有子目录"
+              :image-size="72"
+            />
+          </div>
+          <div class="access-key-directory-selected">
+            当前选择：<span class="mono">{{ accessKeyDirectoryPickerPath }}</span>
+          </div>
+        </div>
+        <template #footer>
+          <el-button @click="accessKeyDirectoryPickerVisible = false">取消</el-button>
+          <el-button type="primary" @click="selectAccessKeyDirectoryPickerPath">选择当前目录</el-button>
         </template>
       </el-dialog>
       <el-dialog v-model="s3CredentialDialogVisible" title="新建 S3 凭证" width="560px">
@@ -8462,6 +8606,76 @@ onBeforeUnmount(() => {
 
 .access-key-form :deep(.el-form-item) {
   margin-bottom: 12px;
+}
+
+.access-key-directory-field {
+  display: flex;
+  width: 100%;
+  gap: 8px;
+}
+
+.access-key-directory-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.access-key-directory-spaces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.access-key-directory-breadcrumb {
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #f5f7fa;
+}
+
+.access-key-directory-breadcrumb :deep(.el-button) {
+  padding: 0;
+  height: auto;
+}
+
+.access-key-directory-list {
+  min-height: 220px;
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+}
+
+.access-key-directory-item {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 1px solid #f0f2f5;
+  background: #fff;
+  color: #303133;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.access-key-directory-item:hover {
+  background: #f5f7fa;
+}
+
+.access-key-directory-arrow {
+  margin-left: auto;
+  color: #909399;
+}
+
+.access-key-directory-selected {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #ecf5ff;
+  color: #606266;
+  word-break: break-all;
 }
 
 .access-key-permission-help {

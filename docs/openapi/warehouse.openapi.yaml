@@ -1741,9 +1741,14 @@ components:
         createdAt: {type: string}
     CreateWebDAVAccessKeyRequest:
       type: object
-      required: [name, permissions]
+      required: [name, rootPath, permissions]
       properties:
         name: {type: string, minLength: 1}
+        rootPath:
+          type: string
+          minLength: 1
+          example: /personal/documents
+          description: 创建时立即绑定的 WebDAV 目录范围；密钥可访问该目录及其子目录。
         permissions:
           type: array
           minItems: 1

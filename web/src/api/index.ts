@@ -323,6 +323,7 @@ export type WebDAVAccessKeyItem = OpenAPISchema<'WebDAVAccessKey'>
 
 export interface CreateWebDAVAccessKeyPayload {
   name: string
+  rootPath: string
   permissions?: AccessKeyPermission[]
   expiresValue?: number
   expiresUnit?: ShareExpiryUnit

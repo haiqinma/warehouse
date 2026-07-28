@@ -88,6 +88,7 @@ func (h *WebDAVAccessKeyHandler) HandleCreate(w http.ResponseWriter, r *http.Req
 
 	var req struct {
 		Name         string   `json:"name"`
+		RootPath     string   `json:"rootPath"`
 		Permissions  []string `json:"permissions"`
 		ExpiresValue int64    `json:"expiresValue"`
 		ExpiresUnit  string   `json:"expiresUnit"`
@@ -99,6 +100,7 @@ func (h *WebDAVAccessKeyHandler) HandleCreate(w http.ResponseWriter, r *http.Req
 
 	item, secret, err := h.service.Create(r.Context(), u, service.CreateWebDAVAccessKeyInput{
 		Name:        req.Name,
+		RootPath:    req.RootPath,
 		Permissions: req.Permissions,
 		Expiry: service.ShareExpiryInput{
 			ExpiresValue: req.ExpiresValue,
@@ -132,7 +134,7 @@ func (h *WebDAVAccessKeyHandler) HandleCreate(w http.ResponseWriter, r *http.Req
 		"keyId":        item.KeyID,
 		"keySecret":    secret,
 		"permissions":  permissionsToStrings(permissionsFromStored(item.Permissions)),
-		"bindingPaths": []string{},
+		"bindingPaths": []string{item.RootPath},
 		"status":       item.Status,
 		"createdAt":    item.CreatedAt.Format(timeLayout),
 	}
