@@ -659,10 +659,7 @@ const adminUsersHeadline = computed(() => {
       title: `当前有 ${adminUsersSummary.value.nearLimit} 个用户使用率已达到 80% 以上。`
     }
   }
-  return {
-    type: 'info' as const,
-    title: '当前没有用户超额，额度状态整体稳定。'
-  }
+  return null
 })
 const filteredAdminUsers = computed(() => {
   const filter = adminUsersFilter.value
@@ -776,18 +773,6 @@ const fileSelectionSummaryText = computed(() => {
   return `已选中 ${count} 项资产，可以执行批量删除`
 })
 const shareViewSummary = computed(() => {
-  if (showShare.value) {
-    if (shareTab.value === 'link') {
-      return {
-        title: '分享链接',
-        description: '生成公开访问链接，适合临时下载或外部访问。创建后会直接得到可复制的链接地址。'
-      }
-    }
-    return {
-      title: '分享对象',
-      description: '把目录或文件共享给当前账号体系下的用户、地址或分组，适合协作访问。'
-    }
-  }
   if (showSharedWithMe.value && !sharedActive.value) {
     return {
       title: '分享给我',
@@ -6023,22 +6008,34 @@ onBeforeUnmount(() => {
                     <span class="path-value">分享</span>
                   </div>
                   <div class="view-segment">
-                    <button
-                      type="button"
-                      class="segment-button"
-                      :class="{ active: shareTab === 'link' }"
-                      @click="switchShareTab('link')"
+                    <el-tooltip
+                      content="生成公开访问链接，适合临时下载或外部访问。创建后会直接得到可复制的链接地址。"
+                      placement="bottom"
+                      :show-after="300"
                     >
-                      分享链接
-                    </button>
-                    <button
-                      type="button"
-                      class="segment-button"
-                      :class="{ active: shareTab === 'direct' }"
-                      @click="switchShareTab('direct')"
+                      <button
+                        type="button"
+                        class="segment-button"
+                        :class="{ active: shareTab === 'link' }"
+                        @click="switchShareTab('link')"
+                      >
+                        分享链接
+                      </button>
+                    </el-tooltip>
+                    <el-tooltip
+                      content="把目录或文件共享给当前账号体系下的用户、地址或分组，适合协作访问。"
+                      placement="bottom"
+                      :show-after="300"
                     >
-                      分享对象
-                    </button>
+                      <button
+                        type="button"
+                        class="segment-button"
+                        :class="{ active: shareTab === 'direct' }"
+                        @click="switchShareTab('direct')"
+                      >
+                        分享对象
+                      </button>
+                    </el-tooltip>
                   </div>
                 </template>
                 <template v-else-if="showSharedWithMe">
@@ -6512,6 +6509,7 @@ onBeforeUnmount(() => {
                   <span>已超额：{{ adminUsersSummary.overQuota }}</span>
                 </div>
                 <el-alert
+                  v-if="adminUsersHeadline"
                   :type="adminUsersHeadline.type"
                   :closable="false"
                   show-icon
