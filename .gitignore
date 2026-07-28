@@ -26,6 +26,7 @@ go.work.sum
 
 # env file
 .env
+.env.test
 
 # Editor/IDE
 .idea/
@@ -36,4 +37,5 @@ test_data/
 config.yaml
 build
 output/
+test-results/
 .tmp/

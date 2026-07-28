@@ -28,6 +28,7 @@ func NewWebDAVAccessKeyService(repo repository.WebDAVAccessKeyRepository) *WebDA
 
 type CreateWebDAVAccessKeyInput struct {
 	Name        string
+	RootPath    string
 	Permissions []string
 	Expiry      ShareExpiryInput
 }
@@ -41,6 +42,13 @@ func (s *WebDAVAccessKeyService) Create(ctx context.Context, owner *user.User, i
 	perms, err := normalizePermissionList(input.Permissions)
 	if err != nil {
 		return nil, "", err
+	}
+	rootPath, err := accesskey.NormalizeRootPath(input.RootPath)
+	if err != nil {
+		return nil, "", err
+	}
+	if strings.TrimSpace(input.RootPath) == "" {
+		return nil, "", accesskey.ErrInvalidRootPath
 	}
 
 	expiresAt, err := input.Expiry.Resolve(time.Now())
@@ -57,11 +65,11 @@ func (s *WebDAVAccessKeyService) Create(ctx context.Context, owner *user.User, i
 		return nil, "", err
 	}
 
-	item, err := accesskey.New(owner.ID, name, keyID, secretHash, "/", perms, expiresAt)
+	item, err := accesskey.New(owner.ID, name, keyID, secretHash, rootPath, perms, expiresAt)
 	if err != nil {
 		return nil, "", err
 	}
-	if err := s.repo.Create(ctx, item); err != nil {
+	if err := s.repo.CreateWithBinding(ctx, item, rootPath); err != nil {
 		return nil, "", err
 	}
 	return item, secret, nil

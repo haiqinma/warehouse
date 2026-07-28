@@ -1456,6 +1456,11 @@ export interface components {
         };
         CreateWebDAVAccessKeyRequest: {
             name: string;
+            /**
+             * @description 创建时立即绑定的 WebDAV 目录范围；密钥可访问该目录及其子目录。
+             * @example /personal/documents
+             */
+            rootPath: string;
             permissions: components["schemas"]["Permission"][];
             /** Format: int64 */
             expiresValue?: number;

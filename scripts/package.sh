@@ -168,6 +168,14 @@ build_artifacts() {
     echo "starter script not found: ${ROOT_DIR}/scripts/starter.sh" >&2
     exit 1
   fi
+  if [[ ! -x "${ROOT_DIR}/scripts/health-check.sh" ]]; then
+    echo "health check script not found or not executable: ${ROOT_DIR}/scripts/health-check.sh" >&2
+    exit 1
+  fi
+  if [[ ! -x "${ROOT_DIR}/scripts/test.sh" ]]; then
+    echo "automated test script not found or not executable: ${ROOT_DIR}/scripts/test.sh" >&2
+    exit 1
+  fi
 }
 
 create_package() {
@@ -188,6 +196,9 @@ create_package() {
   cp "${ROOT_DIR}/build/warehouse" "${staging_dir}/bin/"
   cp "${ROOT_DIR}/config.yaml.template" "${staging_dir}/"
   cp "${ROOT_DIR}/scripts/starter.sh" "${staging_dir}/scripts/"
+  cp "${ROOT_DIR}/scripts/health-check.sh" "${staging_dir}/scripts/"
+  cp "${ROOT_DIR}/scripts/test.sh" "${staging_dir}/scripts/"
+  cp "${ROOT_DIR}/.env.test.template" "${staging_dir}/"
   if [[ -d "${ROOT_DIR}/resources" ]]; then
     cp -R "${ROOT_DIR}/resources" "${staging_dir}/"
   fi
