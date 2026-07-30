@@ -1221,7 +1221,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 重命名定向分享中的文件或目录 */
+        /**
+         * 重命名定向分享中的文件或目录
+         * @description 重命名成功后，服务端会同步更新资源所有者名下相关定向分享、公开链接及其子路径引用。
+         */
         post: operations["renameDirectedShareItem"];
         delete?: never;
         options?: never;
@@ -1239,7 +1242,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** 删除定向分享中的文件或目录 */
+        /**
+         * 删除定向分享中的文件或目录
+         * @description 删除成功后，服务端会删除资源所有者名下该路径及其子路径对应的定向分享、公开链接和派生公开链接。
+         */
         delete: operations["deleteDirectedShareItem"];
         options?: never;
         head?: never;

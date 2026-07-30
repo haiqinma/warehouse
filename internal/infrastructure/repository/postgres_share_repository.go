@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path"
 
 	"github.com/yeying-community/warehouse/internal/domain/share"
 )
@@ -16,6 +17,11 @@ type ShareRepository interface {
 	DeleteByToken(ctx context.Context, token string) error
 	IncrementView(ctx context.Context, token string) error
 	IncrementDownload(ctx context.Context, token string) error
+}
+
+type ShareReferenceRepository interface {
+	UpdatePathsForOwnerMove(ctx context.Context, ownerID, fromPath, toPath string) error
+	DeletePathsForOwner(ctx context.Context, ownerID, rootPath string) error
 }
 
 // PostgresShareRepository PostgreSQL 实现
@@ -186,6 +192,28 @@ func (r *PostgresShareRepository) IncrementDownload(ctx context.Context, token s
 	}
 	if rowsAffected == 0 {
 		return share.ErrShareNotFound
+	}
+	return nil
+}
+
+func (r *PostgresShareRepository) UpdatePathsForOwnerMove(ctx context.Context, ownerID, fromPath, toPath string) error {
+	query := `
+		UPDATE share_items
+		SET path = CASE WHEN path = $2 THEN $3 ELSE $3 || SUBSTRING(path FROM CHAR_LENGTH($2) + 1) END,
+		    name = CASE WHEN path = $2 THEN $4 ELSE name END
+		WHERE user_id = $1
+		  AND (path = $2 OR LEFT(path, CHAR_LENGTH($2) + 1) = $2 || '/')
+	`
+	if _, err := r.db.ExecContext(ctx, query, ownerID, fromPath, toPath, path.Base(toPath)); err != nil {
+		return fmt.Errorf("failed to update public share paths for owner move: %w", err)
+	}
+	return nil
+}
+
+func (r *PostgresShareRepository) DeletePathsForOwner(ctx context.Context, ownerID, rootPath string) error {
+	query := `DELETE FROM share_items WHERE user_id = $1 AND (path = $2 OR LEFT(path, CHAR_LENGTH($2) + 1) = $2 || '/')`
+	if _, err := r.db.ExecContext(ctx, query, ownerID, rootPath); err != nil {
+		return fmt.Errorf("failed to delete public share references for owner path: %w", err)
 	}
 	return nil
 }

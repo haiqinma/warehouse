@@ -302,6 +302,7 @@ func (c *Container) initServices() error {
 	c.AssignmentAllocator = service.NewReplicationAssignmentAllocator(c.Config, c.ClusterNodeRepo, c.ClusterAssignmentRepo, c.Logger)
 	c.MutationRecorder = service.NewMutationRecorder(c.Config, c.ReplicationOutboxRepo, c.PeerResolver, c.Logger)
 	c.ObjectService.SetGuards(c.QuotaService, c.UserRepository, c.MutationRecorder)
+	c.ObjectService.SetShareReferences(c.Config, c.UserShareRepository, c.ShareRepository)
 	c.MultipartService = service.NewMultipartService(c.Config.WebDAV.Directory, c.S3MultipartRepo)
 	c.MultipartService.SetObjectService(c.ObjectService)
 	c.MultipartService.SetQuotaService(c.QuotaService)
@@ -515,6 +516,7 @@ func (c *Container) initHandlers() error {
 		c.UserRepository,
 		c.Logger,
 	)
+	c.WebDAVService.SetPublicShareRepository(c.ShareRepository)
 
 	// 回收站处理器
 	c.RecycleHandler = handler.NewRecycleHandler(
@@ -535,6 +537,7 @@ func (c *Container) initHandlers() error {
 		c.MutationRecorder,
 		c.Logger,
 	)
+	c.ShareUserHandler.SetPublicShareRepository(c.ShareRepository)
 	// 分组管理处理器
 	c.GroupHandler = handler.NewGroupHandler(
 		c.GroupService,

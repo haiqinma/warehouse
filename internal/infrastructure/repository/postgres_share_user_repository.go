@@ -31,6 +31,19 @@ type UserShareRepository interface {
 	ListAudiencesByShareID(ctx context.Context, shareID string) ([]UserShareAudience, error)
 }
 
+type UserShareReferenceRepository interface {
+	UpdatePathsForOwnerMove(ctx context.Context, ownerID, fromPath, toPath string) error
+	DeletePathsForOwner(ctx context.Context, ownerID, rootPath string) error
+}
+
+func (r *PostgresUserShareRepository) DeletePathsForOwner(ctx context.Context, ownerID, rootPath string) error {
+	query := `DELETE FROM internal_share_items WHERE owner_user_id = $1 AND (path = $2 OR LEFT(path, CHAR_LENGTH($2) + 1) = $2 || '/')`
+	if _, err := r.db.ExecContext(ctx, query, ownerID, rootPath); err != nil {
+		return fmt.Errorf("failed to delete share references for owner path: %w", err)
+	}
+	return nil
+}
+
 // PostgresUserShareRepository PostgreSQL 实现
 type PostgresUserShareRepository struct {
 	db *sql.DB
@@ -304,7 +317,7 @@ func (r *PostgresUserShareRepository) UpdatePathsForOwnerMove(ctx context.Contex
 			updated_at = NOW()
 		WHERE owner_user_id = $1
 		  AND status = 'active'
-		  AND (path = $2 OR path LIKE $2 || '/%')
+		  AND (path = $2 OR LEFT(path, CHAR_LENGTH($2) + 1) = $2 || '/')
 	`
 	if _, err := r.db.ExecContext(ctx, query, ownerID, fromPath, toPath, path.Base(toPath)); err != nil {
 		return fmt.Errorf("failed to update share paths for owner move: %w", err)

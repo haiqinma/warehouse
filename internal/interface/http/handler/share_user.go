@@ -19,6 +19,7 @@ import (
 	"github.com/yeying-community/warehouse/internal/domain/shareuser"
 	"github.com/yeying-community/warehouse/internal/domain/user"
 	"github.com/yeying-community/warehouse/internal/infrastructure/atomicfile"
+	"github.com/yeying-community/warehouse/internal/infrastructure/repository"
 	webdavfs "github.com/yeying-community/warehouse/internal/infrastructure/webdav"
 	"github.com/yeying-community/warehouse/internal/interface/http/middleware"
 	"go.uber.org/zap"
@@ -30,7 +31,12 @@ type ShareUserHandler struct {
 	shareUserService *service.ShareUserService
 	userRepo         user.Repository
 	mutationRecorder service.MutationRecorder
+	publicShareRepo  repository.ShareRepository
 	logger           *zap.Logger
+}
+
+func (h *ShareUserHandler) SetPublicShareRepository(repo repository.ShareRepository) {
+	h.publicShareRepo = repo
 }
 
 type bufferedResponse struct {
@@ -363,6 +369,9 @@ func (h *ShareUserHandler) recordShareDAVMutation(r *http.Request, ctx shareDAVC
 	case "MKCOL":
 		return h.mutationRecorder.EnsureDir(r.Context(), ctx.targetFull)
 	case http.MethodDelete:
+		if err := service.RemoveAllShareReferencesForOwnerPath(r.Context(), h.shareUserService.Repository(), h.publicShareRepo, h.shareUserService.Config(), ctx.owner, ctx.targetFull); err != nil {
+			return err
+		}
 		return h.mutationRecorder.RemovePath(r.Context(), ctx.targetFull, ctx.targetWasDir)
 	case "MOVE":
 		toFull, err := h.resolveDAVShareDestinationFullPath(r, ctx)
@@ -374,7 +383,7 @@ func (h *ShareUserHandler) recordShareDAVMutation(r *http.Request, ctx shareDAVC
 		if err == nil {
 			isDir = info.IsDir()
 		}
-		if err := service.SyncUserSharePathsForOwnerMove(r.Context(), h.shareUserService.Repository(), h.shareUserService.Config(), ctx.owner, ctx.targetFull, toFull); err != nil {
+		if err := service.SyncAllSharePathsForOwnerMove(r.Context(), h.shareUserService.Repository(), h.publicShareRepo, h.shareUserService.Config(), ctx.owner, ctx.targetFull, toFull); err != nil {
 			return err
 		}
 		if err := h.mutationRecorder.EnsureDir(r.Context(), filepath.Dir(toFull)); err != nil {
@@ -1157,9 +1166,9 @@ func (h *ShareUserHandler) HandleRename(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Failed to rename", http.StatusInternalServerError)
 		return
 	}
-	if err := service.SyncUserSharePathsForOwnerMove(r.Context(), h.shareUserService.Repository(), h.shareUserService.Config(), owner, fromPath, toPath); err != nil {
-		h.logger.Error("failed to sync share paths after share rename", zap.Error(err))
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	if err := service.SyncAllSharePathsForOwnerMove(r.Context(), h.shareUserService.Repository(), h.publicShareRepo, h.shareUserService.Config(), owner, fromPath, toPath); err != nil {
+		h.logger.Error("failed to sync all share paths after share rename", zap.Error(err))
+		http.Error(w, "Failed to update share references", http.StatusInternalServerError)
 		return
 	}
 	if err := h.mutationRecorder.EnsureDir(r.Context(), filepath.Dir(toPath)); err != nil {
@@ -1172,7 +1181,6 @@ func (h *ShareUserHandler) HandleRename(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte(`{"message":"renamed successfully"}`)); err != nil {
 		h.logger.Error("failed to write response", zap.Error(err))
@@ -1242,12 +1250,16 @@ func (h *ShareUserHandler) HandleDelete(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Failed to delete", http.StatusInternalServerError)
 		return
 	}
+	if err := service.RemoveAllShareReferencesForOwnerPath(r.Context(), h.shareUserService.Repository(), h.publicShareRepo, h.shareUserService.Config(), owner, fullPath); err != nil {
+		h.logger.Error("failed to remove share references after share delete", zap.Error(err))
+		http.Error(w, "Failed to remove share references", http.StatusInternalServerError)
+		return
+	}
 	if err := h.mutationRecorder.RemovePath(r.Context(), fullPath, info.IsDir()); err != nil {
 		h.logger.Error("failed to record share delete mutation", zap.Error(err))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte(`{"message":"deleted successfully"}`)); err != nil {
 		h.logger.Error("failed to write response", zap.Error(err))

@@ -23,6 +23,8 @@ import (
 	"github.com/yeying-community/warehouse/internal/domain/quota"
 	"github.com/yeying-community/warehouse/internal/domain/user"
 	"github.com/yeying-community/warehouse/internal/infrastructure/atomicfile"
+	"github.com/yeying-community/warehouse/internal/infrastructure/config"
+	"github.com/yeying-community/warehouse/internal/infrastructure/repository"
 )
 
 type ObjectInfo struct {
@@ -60,8 +62,17 @@ type ObjectService struct {
 	quotaService     quota.Service
 	userRepo         user.Repository
 	mutationRecorder MutationRecorder
+	shareConfig      *config.Config
+	userShareRepo    repository.UserShareRepository
+	publicShareRepo  repository.ShareRepository
 	metadataRepo     objectMetadataRepository
 	locks            sync.Map
+}
+
+func (s *ObjectService) SetShareReferences(cfg *config.Config, userShareRepo repository.UserShareRepository, publicShareRepo repository.ShareRepository) {
+	s.shareConfig = cfg
+	s.userShareRepo = userShareRepo
+	s.publicShareRepo = publicShareRepo
 }
 
 type quotaReserveRepository interface {
@@ -244,6 +255,9 @@ func (s *ObjectService) DeleteForUser(ctx context.Context, owner *user.User, buc
 		return fmt.Errorf("cannot delete directory object")
 	}
 	if err := os.Remove(fullPath); err != nil {
+		return err
+	}
+	if err := RemoveAllShareReferencesForOwnerPath(ctx, s.userShareRepo, s.publicShareRepo, s.shareConfig, owner, fullPath); err != nil {
 		return err
 	}
 	if err := s.deleteMetadata(ctx, owner.Directory, bucket, key); err != nil {
