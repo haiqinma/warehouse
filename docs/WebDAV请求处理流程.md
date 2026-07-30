@@ -88,18 +88,24 @@ sequenceDiagram
     participant C as Client
     participant S as WebDAVService
     participant R as RecycleRepository
+    participant SR as ShareRepository
     participant FS as FileSystem
 
     C->>S: DELETE /path/to/file
     S->>FS: os.Stat
     S->>FS: os.Rename to .recycle/{hash}_{name}
     S->>R: Create recycle_items
+    S->>SR: 删除根路径及子路径分享引用
     S-->>C: 200 OK
 ```
 
 - 若移动失败，会回退为直接删除。
 - 回收站文件命名规则：`{hash}_{原文件名}`。
+- 删除到回收站后，定向分享、公开链接和派生公开链接立即失效；恢复资源不会自动恢复分享。
 
 ## MOVE/COPY 目的路径规范化
 
 对 `Destination` Header 做解码和规范化，避免代理或编码导致的路径异常。
+
+- `MOVE` 成功后，服务端同步迁移根资源及子路径的定向分享、公开链接和派生公开链接。
+- `COPY` 保留源路径分享关系，新副本不自动继承分享。

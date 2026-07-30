@@ -369,6 +369,28 @@ export const shareApi = {
     })
   },
 
+  createFromReceived(payload: {
+    shareId: string
+    relativePath?: string
+    mode?: ShareMode
+    expiresValue?: number
+    expiresUnit?: ShareExpiryUnit
+  }) {
+    return request<{
+      token: string
+      name: string
+      path: string
+      mode: ShareMode
+      url: string
+      viewCount: number
+      downloadCount: number
+      expiresAt?: string
+    }>('/api/v1/public/share/create-from-received', {
+      method: 'POST',
+      body: payload as unknown as Record<string, unknown>
+    })
+  },
+
   list() {
     return request<{
       items: ShareItem[]

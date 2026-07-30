@@ -37,11 +37,16 @@ type WebDAVService struct {
 	userRepo         user.Repository
 	recycleRepo      repository.RecycleRepository
 	userShareRepo    repository.UserShareRepository
+	publicShareRepo  repository.ShareRepository
 	mutationRecorder MutationRecorder
 	assetSpace       *assetspace.Manager
 	logger           *zap.Logger
 	lockSystem       webdav.LockSystem
 	recycleDir       string // 回收站目录
+}
+
+func (s *WebDAVService) SetPublicShareRepository(repo repository.ShareRepository) {
+	s.publicShareRepo = repo
 }
 
 const userGuideWebDAVFileName = "Warehouse 用户使用指南.md"
@@ -269,7 +274,7 @@ func (s *WebDAVService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *WebDAVService) syncUserSharePathsForMove(ctx context.Context, u *user.User, userDir string, r *http.Request) error {
-	if s.userShareRepo == nil || u == nil || r == nil || strings.ToUpper(strings.TrimSpace(r.Method)) != "MOVE" {
+	if (s.userShareRepo == nil && s.publicShareRepo == nil) || u == nil || r == nil || strings.ToUpper(strings.TrimSpace(r.Method)) != "MOVE" {
 		return nil
 	}
 	destination := strings.TrimSpace(r.Header.Get("Destination"))
@@ -278,7 +283,7 @@ func (s *WebDAVService) syncUserSharePathsForMove(ctx context.Context, u *user.U
 	}
 	fromPath := s.resolveUserFullPath(userDir, r.URL.Path)
 	toPath := s.resolveUserFullPath(userDir, destination)
-	return SyncUserSharePathsForOwnerMove(ctx, s.userShareRepo, s.config, u, fromPath, toPath)
+	return SyncAllSharePathsForOwnerMove(ctx, s.userShareRepo, s.publicShareRepo, s.config, u, fromPath, toPath)
 }
 
 func (s *WebDAVService) userGuideVirtualFiles() []webdavfs.VirtualFile {
@@ -381,6 +386,10 @@ func (s *WebDAVService) handleDeleteWithRecycle(w http.ResponseWriter, r *http.R
 		rec := newBufferedStatusRecorder()
 		handler.ServeHTTP(rec, r)
 		if rec.status >= 200 && rec.status < 300 {
+			if err := RemoveAllShareReferencesForOwnerPath(r.Context(), s.userShareRepo, s.publicShareRepo, s.config, u, fullPath); err != nil {
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
 			if err := s.mutationRecorder.RemovePath(r.Context(), fullPath, info.IsDir()); err != nil {
 				if s.handleMutationRecordError("fallback delete mutation skipped because no standby is currently available",
 					err,
@@ -397,6 +406,10 @@ func (s *WebDAVService) handleDeleteWithRecycle(w http.ResponseWriter, r *http.R
 		if err := rec.FlushTo(w); err != nil {
 			s.logger.Error("failed to flush delete fallback response", zap.Error(err))
 		}
+		return
+	}
+	if err := RemoveAllShareReferencesForOwnerPath(r.Context(), s.userShareRepo, s.publicShareRepo, s.config, u, fullPath); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
@@ -429,6 +442,10 @@ func (s *WebDAVService) handleDirectDelete(
 	rec := newBufferedStatusRecorder()
 	handler.ServeHTTP(rec, r)
 	if rec.status >= 200 && rec.status < 300 {
+		if err := RemoveAllShareReferencesForOwnerPath(r.Context(), s.userShareRepo, s.publicShareRepo, s.config, u, fullPath); err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
 		if err := s.mutationRecorder.RemovePath(r.Context(), fullPath, isDir); err != nil {
 			if s.handleMutationRecordError("hard delete mutation skipped because no standby is currently available",
 				err,

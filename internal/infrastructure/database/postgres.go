@@ -86,6 +86,8 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS user_rules (
 			id SERIAL PRIMARY KEY,
 			user_id VARCHAR(50) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			creator_user_id VARCHAR(50) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			source_share_id VARCHAR(50) NULL,
 			path TEXT NOT NULL,
 			permissions VARCHAR(10) NOT NULL,
 			regex BOOLEAN NOT NULL DEFAULT FALSE,
@@ -391,6 +393,10 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 		`ALTER TABLE share_items ADD COLUMN IF NOT EXISTS view_count BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE share_items ADD COLUMN IF NOT EXISTS download_count BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE share_items ADD COLUMN IF NOT EXISTS mode VARCHAR(20) NOT NULL DEFAULT 'download'`,
+		`ALTER TABLE share_items ADD COLUMN IF NOT EXISTS creator_user_id VARCHAR(50)`,
+		`UPDATE share_items SET creator_user_id = user_id WHERE creator_user_id IS NULL`,
+		`ALTER TABLE share_items ALTER COLUMN creator_user_id SET NOT NULL`,
+		`ALTER TABLE share_items ADD COLUMN IF NOT EXISTS source_share_id VARCHAR(50) NULL`,
 		`ALTER TABLE internal_share_items ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'`,
 		`ALTER TABLE recycle_items ADD COLUMN IF NOT EXISTS is_dir BOOLEAN NOT NULL DEFAULT FALSE`,
 
@@ -405,6 +411,7 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 
 		// 创建分享的用户ID索引
 		`CREATE INDEX IF NOT EXISTS idx_share_items_user_id ON share_items(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_share_items_creator_user_id ON share_items(creator_user_id)`,
 
 		`CREATE INDEX IF NOT EXISTS idx_internal_share_items_owner_created
 			ON internal_share_items(owner_user_id, created_at DESC)`,
