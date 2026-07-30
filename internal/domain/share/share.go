@@ -24,6 +24,8 @@ type ShareItem struct {
 	ID            string
 	Token         string
 	UserID        string
+	CreatorUserID string
+	SourceShareID string
 	Username      string
 	Name          string
 	Path          string
@@ -41,6 +43,7 @@ func NewShareItem(userID, username, path, name, mode string, expiresAt *time.Tim
 		ID:            uuid.NewString(),
 		Token:         uuid.NewString(),
 		UserID:        userID,
+		CreatorUserID: userID,
 		Username:      username,
 		Name:          name,
 		Path:          path,
@@ -50,6 +53,13 @@ func NewShareItem(userID, username, path, name, mode string, expiresAt *time.Tim
 		DownloadCount: 0,
 		CreatedAt:     now,
 	}
+}
+
+func NewDerivedShareItem(ownerUserID, ownerUsername, creatorUserID, sourceShareID, path, name, mode string, expiresAt *time.Time) *ShareItem {
+	item := NewShareItem(ownerUserID, ownerUsername, path, name, mode, expiresAt)
+	item.CreatorUserID = creatorUserID
+	item.SourceShareID = sourceShareID
+	return item
 }
 
 // IsExpired 判断是否过期

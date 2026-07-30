@@ -373,6 +373,7 @@ func (c *Container) initServices() error {
 		c.Config,
 		c.Logger,
 	)
+	c.ShareService.SetShareUserService(c.ShareUserService)
 	c.UploadSessionService = service.NewUploadSessionService(
 		c.Config,
 		permissionChecker,

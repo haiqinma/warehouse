@@ -19,10 +19,15 @@ import (
 
 // ShareService 文件分享服务
 type ShareService struct {
-	shareRepo repository.ShareRepository
-	userRepo  user.Repository
-	config    *config.Config
-	logger    *zap.Logger
+	shareRepo        repository.ShareRepository
+	userRepo         user.Repository
+	config           *config.Config
+	logger           *zap.Logger
+	shareUserService *ShareUserService
+}
+
+func (s *ShareService) SetShareUserService(service *ShareUserService) {
+	s.shareUserService = service
 }
 
 // NewShareService 创建分享服务
@@ -43,6 +48,51 @@ func NewShareService(
 type ShareCreateInput struct {
 	Expiry ShareExpiryInput
 	Mode   string
+}
+
+func (s *ShareService) CreateFromReceived(ctx context.Context, creator *user.User, sourceShareID, relativePath string, input ShareCreateInput) (*share.ShareItem, error) {
+	if s.shareUserService == nil {
+		return nil, fmt.Errorf("received share service is unavailable")
+	}
+	source, owner, err := s.shareUserService.ResolveForTarget(ctx, creator, sourceShareID, "read")
+	if err != nil {
+		return nil, err
+	}
+	if !user.ParsePermissions(source.Permissions).Read {
+		return nil, fmt.Errorf("permission denied: share is not readable")
+	}
+	_, fullPath, err := s.shareUserService.ResolveSharePath(owner, source, relativePath)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat shared file: %w", err)
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("directory sharing not supported")
+	}
+	expiresAt, err := input.Expiry.Resolve(time.Now())
+	if err != nil {
+		return nil, err
+	}
+	if source.ExpiresAt != nil && (expiresAt == nil || expiresAt.After(*source.ExpiresAt)) {
+		expiresAt = source.ExpiresAt
+	}
+	mode, err := share.NormalizeMode(input.Mode)
+	if err != nil {
+		return nil, err
+	}
+	cleanRelative := strings.TrimPrefix(path.Clean("/"+relativePath), "/")
+	resourcePath := source.Path
+	if cleanRelative != "" && cleanRelative != "." {
+		resourcePath = path.Join(source.Path, cleanRelative)
+	}
+	item := share.NewDerivedShareItem(owner.ID, owner.Username, creator.ID, source.ID, resourcePath, info.Name(), mode, expiresAt)
+	if err := s.shareRepo.Create(ctx, item); err != nil {
+		return nil, err
+	}
+	return item, nil
 }
 
 // Create 创建分享链接
@@ -136,7 +186,7 @@ func (s *ShareService) Revoke(ctx context.Context, u *user.User, token string) e
 	if err != nil {
 		return err
 	}
-	if item.UserID != u.ID {
+	if item.CreatorUserID != u.ID {
 		return fmt.Errorf("permission denied: not your share")
 	}
 	normalized, err := s.normalizeItemPath(item.Path)
@@ -144,8 +194,10 @@ func (s *ShareService) Revoke(ctx context.Context, u *user.User, token string) e
 		return err
 	}
 	item.Path = normalized
-	if err := enforceAppScope(ctx, s.config, normalized, "delete"); err != nil {
-		return err
+	if item.SourceShareID == "" {
+		if err := enforceAppScope(ctx, s.config, normalized, "delete"); err != nil {
+			return err
+		}
 	}
 	return s.shareRepo.DeleteByToken(ctx, token)
 }
@@ -168,6 +220,19 @@ func (s *ShareService) Resolve(ctx context.Context, token string) (*share.ShareI
 	}
 	if item.IsExpired() {
 		return nil, nil, nil, share.ErrShareExpired
+	}
+	if item.SourceShareID != "" {
+		if s.shareUserService == nil {
+			return nil, nil, nil, share.ErrInvalidShare
+		}
+		creator, err := s.userRepo.FindByID(ctx, item.CreatorUserID)
+		if err != nil {
+			return nil, nil, nil, share.ErrInvalidShare
+		}
+		source, _, err := s.shareUserService.ResolveForTarget(ctx, creator, item.SourceShareID, "read")
+		if err != nil || !user.ParsePermissions(source.Permissions).Read {
+			return nil, nil, nil, share.ErrInvalidShare
+		}
 	}
 
 	u, err := s.userRepo.FindByID(ctx, item.UserID)

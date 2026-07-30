@@ -1096,6 +1096,34 @@ paths:
               schema: {$ref: "#/components/schemas/PublicShare"}
         "400": {$ref: "#/components/responses/PlainTextError"}
         "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/create-from-received:
+    post:
+      tags: [Public shares]
+      operationId: createPublicShareFromReceived
+      summary: 为收到的共享文件创建公开链接
+      description: 仅允许仍具备读取权限的有效受众调用。派生链接的有效期不会超过原共享；原共享撤销、过期或受众资格失效后，派生链接同步失效。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [shareId, relativePath]
+              properties:
+                shareId: {type: string, format: uuid}
+                relativePath: {type: string, description: 相对于收到的共享根目录的文件路径；原共享本身是文件时传空字符串}
+                mode: {type: string, enum: [download, preview], default: download}
+                expiresValue: {type: integer, format: int64, minimum: 0}
+                expiresUnit: {type: string, enum: [minute, hour, day, week, month, year, never]}
+      responses:
+        "200":
+          description: 分享创建成功
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PublicShare"}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "401": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
   /api/v1/public/share/list:
     get:
       tags: [Public shares]

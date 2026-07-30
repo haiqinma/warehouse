@@ -136,6 +136,7 @@ const movingSharedByDrag = ref(false)
 const shareLinkDialogVisible = ref(false)
 const shareLinkSubmitting = ref(false)
 const shareLinkTarget = ref<FileItem | null>(null)
+const shareLinkReceivedContext = ref<{ shareId: string; relativePath: string } | null>(null)
 const shareLinkForm = ref(createDefaultShareLinkForm())
 const shareUserDialogVisible = ref(false)
 const shareUserSubmitting = ref(false)
@@ -3002,6 +3003,26 @@ async function shareFile(item: FileItem) {
     return
   }
   shareLinkTarget.value = item
+  shareLinkReceivedContext.value = null
+  shareLinkForm.value = createDefaultShareLinkForm()
+  shareLinkDialogVisible.value = true
+}
+
+function shareReceivedRoot(item: DirectShareItem) {
+  if (item.isDir || !item.permissions?.includes('read')) return
+  shareLinkTarget.value = { name: item.name, path: item.path, isDir: false, size: 0, modified: item.createdAt || '' }
+  shareLinkReceivedContext.value = { shareId: item.id, relativePath: '' }
+  shareLinkForm.value = createDefaultShareLinkForm()
+  shareLinkDialogVisible.value = true
+}
+
+function shareReceivedFile(item: FileItem) {
+  if (!sharedActive.value || item.isDir || !sharedCanRead.value) return
+  shareLinkTarget.value = item
+  shareLinkReceivedContext.value = {
+    shareId: sharedActive.value.id,
+    relativePath: normalizeShareRelative(item.path)
+  }
   shareLinkForm.value = createDefaultShareLinkForm()
   shareLinkDialogVisible.value = true
 }
@@ -3013,13 +3034,20 @@ async function submitShareLink() {
 
   shareLinkSubmitting.value = true
   try {
-    const data = await shareApi.create(shareLinkTarget.value.path, {
-      ...expiryPayload,
-      mode: shareLinkForm.value.mode
-    })
+    const data = shareLinkReceivedContext.value
+      ? await shareApi.createFromReceived({
+          ...shareLinkReceivedContext.value,
+          ...expiryPayload,
+          mode: shareLinkForm.value.mode
+        })
+      : await shareApi.create(shareLinkTarget.value.path, {
+          ...expiryPayload,
+          mode: shareLinkForm.value.mode
+        })
     const url = data.url || `${window.location.origin}/api/v1/public/share/${data.token}`
     await copyText(url, '分享链接已复制')
     shareLinkDialogVisible.value = false
+    shareLinkReceivedContext.value = null
   } catch (error: any) {
     console.error('创建分享失败:', error)
     showError(error?.message || '创建分享失败')
@@ -6772,10 +6800,12 @@ onBeforeUnmount(() => {
               :shared-can-delete="sharedCanDelete"
               :open-share-detail="openShareDetail"
               :download-shared-root="downloadSharedRoot"
+              :share-received-root="shareReceivedRoot"
               :get-preview-mode="getPreviewMode"
               :open-file-preview="openFilePreview"
               :open-shared-entry-detail="openSharedEntryDetail"
               :download-shared-file="downloadSharedFile"
+              :share-received-file="shareReceivedFile"
               :rename-shared-item="renameSharedItem"
               :delete-shared-item="deleteSharedItem"
             />

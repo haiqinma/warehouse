@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Delete, Download, Edit, MoreFilled, View } from '@element-plus/icons-vue'
+import { Delete, Download, Edit, Link, MoreFilled, View } from '@element-plus/icons-vue'
 import type { DirectShareItem } from '@/api'
 import type { FileItem } from '../types'
 
@@ -28,10 +28,12 @@ const props = defineProps<{
   sharedCanDelete: boolean
   openShareDetail: (mode: 'share' | 'directShare' | 'receivedShare', item: DirectShareItem) => void
   downloadSharedRoot: (item: DirectShareItem) => void
+  shareReceivedRoot: (item: DirectShareItem) => void
   getPreviewMode: (item: FileItem) => 'text' | 'pdf' | 'word' | 'image' | 'audio' | 'video' | null
   openFilePreview: (item: FileItem) => void
   openSharedEntryDetail: (item: FileItem) => void
   downloadSharedFile: (item: FileItem) => void
+  shareReceivedFile: (item: FileItem) => void
   renameSharedItem: (item: FileItem) => void
   deleteSharedItem: (item: FileItem) => void
 }>()
@@ -45,6 +47,10 @@ function handleMobileCommand(row: FileItem, command: string | number) {
   const action = String(command)
   if (action === 'preview') {
     props.openFilePreview(row)
+    return
+  }
+  if (action === 'share-link') {
+    props.shareReceivedFile(row)
     return
   }
   if (action === 'rename') {
@@ -103,7 +109,7 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
         <span class="time-cell">{{ row.createdAt ? formatTime(row.createdAt) : '-' }}</span>
       </template>
     </el-table-column>
-    <el-table-column label="操作" width="120" fixed="right">
+    <el-table-column label="操作" width="150" fixed="right">
       <template #default="{ row }">
         <div class="actions" @click.stop>
           <el-tooltip v-if="row.isDir" content="详情" placement="top">
@@ -111,6 +117,9 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
           </el-tooltip>
           <el-tooltip v-else-if="row.permissions && row.permissions.includes('read')" content="下载" placement="top">
             <el-button type="primary" link :icon="Download" @click="downloadSharedRoot(row)" />
+          </el-tooltip>
+          <el-tooltip v-if="!row.isDir && row.permissions && row.permissions.includes('read')" content="生成下载链接" placement="top">
+            <el-button type="primary" link :icon="Link" @click="shareReceivedRoot(row)" />
           </el-tooltip>
         </div>
       </template>
@@ -172,6 +181,9 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
           <el-tooltip v-if="!row.isDir && sharedCanRead" content="下载" placement="top">
             <el-button type="primary" link :icon="Download" @click="downloadSharedFile(row)" />
           </el-tooltip>
+          <el-tooltip v-if="!row.isDir && sharedCanRead" content="生成下载链接" placement="top">
+            <el-button type="primary" link :icon="Link" @click="shareReceivedFile(row)" />
+          </el-tooltip>
           <el-tooltip v-if="sharedCanUpdate" content="重命名" placement="top">
             <el-button type="primary" link :icon="Edit" @click="renameSharedItem(row)" />
           </el-tooltip>
@@ -221,6 +233,13 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
               :icon="Download"
               @click="downloadSharedRoot(row)"
             />
+            <el-button
+              v-if="!row.isDir && row.permissions && row.permissions.includes('read')"
+              size="small"
+              circle
+              :icon="Link"
+              @click="shareReceivedRoot(row)"
+            />
           </div>
         </div>
       </div>
@@ -263,6 +282,7 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item v-if="canPreview(row)" command="preview">预览</el-dropdown-item>
+                  <el-dropdown-item v-if="!row.isDir && sharedCanRead" command="share-link">生成下载链接</el-dropdown-item>
                   <el-dropdown-item v-if="sharedCanUpdate" command="rename">重命名</el-dropdown-item>
                   <el-dropdown-item v-if="sharedCanDelete" command="delete">删除</el-dropdown-item>
                 </el-dropdown-menu>
