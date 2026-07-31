@@ -504,6 +504,9 @@ func (s *UploadSessionService) resolveShareTarget(ctx context.Context, uploader 
 	}
 	item, owner, err := s.shareUserService.ResolveForTarget(ctx, uploader, strings.TrimSpace(input.ShareID), "create", "update")
 	if err != nil {
+		if isPermissionDeniedError(err) {
+			return nil, fmt.Errorf("%w: %v", ErrUploadSessionForbidden, err)
+		}
 		return nil, err
 	}
 	_, fullPath, err := s.shareUserService.ResolveSharePath(owner, item, input.Path)
@@ -695,6 +698,13 @@ func requiredActionForUploadOperation(op permission.Operation) string {
 		return "update"
 	}
 	return "create"
+}
+
+func isPermissionDeniedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "permission denied")
 }
 
 func expectedPartCount(size, chunkSize int64) int {
