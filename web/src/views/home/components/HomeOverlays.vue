@@ -748,6 +748,7 @@ onBeforeUnmount(() => {
           filterable
           allow-create
           default-first-option
+          fit-input-width
           clearable
           style="width: 100%"
         >

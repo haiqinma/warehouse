@@ -4,7 +4,7 @@ import { storeToRefs } from 'pinia'
 import { ArrowLeft, ArrowRight, ArrowUp, Delete, Expand, Fold, Folder, FolderAdd, FolderOpened, Grid, Refresh, Upload, DocumentCopy, Share, Search, MoreFilled, Notebook, User, Lock, Unlock } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { getSupportedCipherSuites, type CipherSuiteInfo } from '@yeying-community/web3-bs'
-import { quotaApi, userApi, recycleApi, shareApi, directShareApi, assetsApi, webdavAccessKeyApi, s3CredentialApi, adminUserApi, type RecycleItem, type ShareItem, type DirectShareItem, type AssetSpaceInfo, type ShareExpiryUnit, type ShareMode, type AccessKeyPermission, type WebDAVAccessKeyItem, type CreateWebDAVAccessKeyResult, type S3CredentialItem, type CreateS3CredentialResult, type AdminUserItem } from '@/api'
+import { quotaApi, userApi, recycleApi, shareApi, directShareApi, assetsApi, webdavAccessKeyApi, s3CredentialApi, adminUserApi, type RecycleItem, type ShareItem, type DirectShareItem, type AssetSpaceInfo, type ShareExpiryUnit, type ShareMode, type AccessKeyPermission, type WebDAVAccessKeyItem, type CreateWebDAVAccessKeyResult, type S3CredentialItem, type CreateS3CredentialResult, type AdminUserItem, type GroupMember } from '@/api'
 import { AUTH_CHANGED_EVENT, isLoggedIn, getUsername, getWalletName, getCurrentAccount, getUserPermissions, getUserCreatedAt, loginWithWallet, focusPendingWalletApproval, loginWithPassword, sendEmailCode, loginWithEmailCode, getAccountHistory, watchWalletAccounts, watchWalletProvider } from '@/plugins/auth'
 import { decryptBlobContent, encryptFileContent, encryptTextContent } from '@/utils/crypto'
 import {
@@ -172,6 +172,7 @@ const s3CredentialDirectory = ref('')
 const accessKeyForm = ref(createDefaultAccessKeyForm('/'))
 const groupStore = useGroupStore()
 const { groupLoading, managedGroups, activeGroupMembers } = storeToRefs(groupStore)
+const shareAddressMembers = computed(() => dedupeGroupMembersByWalletAddress(activeGroupMembers.value))
 const uploadTaskStore = useUploadTaskStore()
 const editingUsername = ref(false)
 const usernameDraft = ref('')
@@ -593,8 +594,29 @@ const selectedGroupMembers = computed(() => {
     shareUserForm.value.groupIds.map(item => String(item || '').trim())
   )
   if (!groupSet.size) return []
-  return activeGroupMembers.value.filter(item => groupSet.has(String(item.groupId || '').trim()))
+  return dedupeGroupMembersByWalletAddress(
+    activeGroupMembers.value.filter(item => groupSet.has(String(item.groupId || '').trim()))
+  )
 })
+
+function dedupeGroupMembersByWalletAddress(members: GroupMember[]): GroupMember[] {
+  const uniqueMembers = new Map<string, GroupMember>()
+  for (const member of members) {
+    const walletAddress = normalizeWalletAddress(member.walletAddress)
+    const key = walletAddress || `member:${member.id}`
+    const existing = uniqueMembers.get(key)
+    if (!existing || memberDisplayPriority(member) > memberDisplayPriority(existing)) {
+      uniqueMembers.set(key, member)
+    }
+  }
+  return Array.from(uniqueMembers.values())
+}
+
+function memberDisplayPriority(member: GroupMember): number {
+  if (String(member.alias || '').trim()) return 2
+  const name = String(member.name || '').trim()
+  return name && normalizeWalletAddress(name) !== normalizeWalletAddress(member.walletAddress) ? 1 : 0
+}
 const quotaAvailable = computed(() => {
   if (quota.value.unlimited) return null
   const available = Number.isFinite(quota.value.available)
@@ -6892,7 +6914,7 @@ onBeforeUnmount(() => {
         :share-user-submitting="shareUserSubmitting"
         :share-user-target="shareUserTarget"
         :share-user-form="shareUserForm"
-        :group-members="activeGroupMembers"
+        :group-members="shareAddressMembers"
         :managed-groups="managedGroups"
         :selected-group-members="selectedGroupMembers"
         :submit-share-user="submitShareUser"
