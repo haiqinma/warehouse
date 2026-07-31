@@ -778,13 +778,6 @@ onBeforeUnmount(() => {
         </el-select>
         <div class="share-group-meta">分组成员：{{ selectedGroupMembers.length }} 个</div>
       </el-form-item>
-      <el-form-item v-if="shareUserForm.targetMode === 'groups' && selectedGroupMembers.length">
-        <div class="share-group-list">
-          <span v-for="item in selectedGroupMembers" :key="item.id" class="mono">
-            {{ shortenAddress(item.walletAddress) }}
-          </span>
-        </div>
-      </el-form-item>
       <el-form-item v-if="shareUserForm.targetMode === 'all_users'" label="共享范围">
         <div class="share-inline-meta">当前账号体系下的所有已登录用户</div>
       </el-form-item>
@@ -1038,12 +1031,6 @@ onBeforeUnmount(() => {
 .member-address {
   font-size: 12px;
   color: #909399;
-}
-
-.share-group-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
 }
 
 .user-tags {

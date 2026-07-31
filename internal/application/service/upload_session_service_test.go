@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yeying-community/warehouse/internal/domain/group"
 	"github.com/yeying-community/warehouse/internal/domain/shareuser"
 	"github.com/yeying-community/warehouse/internal/domain/user"
 	"github.com/yeying-community/warehouse/internal/infrastructure/config"
@@ -145,6 +146,45 @@ func TestUploadSessionServiceShareUpdatePermissionOverwritesExistingFile(t *test
 	}
 }
 
+func TestUploadSessionServiceDynamicGroupShareRevalidatesCurrentMembership(t *testing.T) {
+	t.Parallel()
+
+	svc, target, shareID, sharedDir, groupRepo, memberID := newUploadSessionGroupShareFixture(t, "CRU")
+	session, err := svc.Create(context.Background(), target, UploadSessionCreateInput{
+		ShareID:   shareID,
+		Path:      "file.txt",
+		Size:      6,
+		ChunkSize: 3,
+		FileName:  "file.txt",
+	})
+	if err != nil {
+		t.Fatalf("Create while active group member: %v", err)
+	}
+
+	groupRepo.members[memberID].Status = group.MemberStatusPending
+	if _, _, err := svc.UploadPart(context.Background(), target, session.ID, 1, uploadSessionTestChecksum("abc"), strings.NewReader("abc")); !errors.Is(err, ErrUploadSessionForbidden) {
+		t.Fatalf("UploadPart after membership became pending error = %v, want %v", err, ErrUploadSessionForbidden)
+	}
+
+	groupRepo.members[memberID].Status = group.MemberStatusActive
+	if _, _, err := svc.UploadPart(context.Background(), target, session.ID, 1, uploadSessionTestChecksum("abc"), strings.NewReader("abc")); err != nil {
+		t.Fatalf("UploadPart 1 after membership restored: %v", err)
+	}
+	if _, _, err := svc.UploadPart(context.Background(), target, session.ID, 2, uploadSessionTestChecksum("def"), strings.NewReader("def")); err != nil {
+		t.Fatalf("UploadPart 2: %v", err)
+	}
+	if _, err := svc.Complete(context.Background(), target, session.ID); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(sharedDir, "file.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "abcdef" {
+		t.Fatalf("expected completed content, got %q", data)
+	}
+}
+
 func TestUploadSessionServiceCleanupExpiredRemovesSessionDirectory(t *testing.T) {
 	t.Parallel()
 
@@ -242,6 +282,48 @@ func newUploadSessionShareFixture(t *testing.T, permissions string) (*UploadSess
 	shareService := NewShareUserService(shareRepo, userRepo, nil, nil, cfg, zap.NewNop())
 	svc := NewUploadSessionService(cfg, nil, nil, userRepo, shareService, noopMutationRecorder{}, zap.NewNop())
 	return svc, target, item.ID, sharedDir
+}
+
+func newUploadSessionGroupShareFixture(t *testing.T, permissions string) (*UploadSessionService, *user.User, string, string, *fakeGroupRepository, string) {
+	t.Helper()
+
+	root := t.TempDir()
+	cfg := uploadSessionTestConfig(root)
+	owner := newShareTestUser(t, "owner", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	target := newShareTestUser(t, "target", "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+	userRepo := newTestUserRepo()
+	mustSaveUser(t, userRepo, owner)
+	mustSaveUser(t, userRepo, target)
+
+	sharedDir := filepath.Join(root, owner.Directory, "personal", "shared")
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
+		t.Fatalf("mkdir shared dir: %v", err)
+	}
+
+	groupRepo := newFakeGroupRepository()
+	groupSvc := NewGroupService(groupRepo, userRepo)
+	grp, err := groupSvc.CreateGroup(context.Background(), owner, "team")
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	member, err := groupSvc.CreateMember(context.Background(), owner, CreateMemberInput{Target: target.WalletAddress, GroupID: grp.ID})
+	if err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+	if err := groupSvc.ApproveMember(context.Background(), target, member.ID, "Member Name"); err != nil {
+		t.Fatalf("ApproveMember: %v", err)
+	}
+
+	shareRepo := newMemoryShareRepo()
+	shareService := NewShareUserService(shareRepo, userRepo, groupSvc, nil, cfg, zap.NewNop())
+	item, err := shareService.CreateByGroups(context.Background(), owner, []string{grp.ID}, "/personal/shared", permissions, ShareExpiryInput{})
+	if err != nil {
+		t.Fatalf("CreateByGroups: %v", err)
+	}
+
+	svc := NewUploadSessionService(cfg, nil, nil, userRepo, shareService, noopMutationRecorder{}, zap.NewNop())
+	return svc, target, item.ID, sharedDir, groupRepo, member.ID
 }
 
 type uploadSessionTestRecorder struct {
