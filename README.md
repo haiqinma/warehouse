@@ -329,12 +329,14 @@ psql -h 127.0.0.1 -p 5432 -U postgres -d warehouse
 
 ## 相关文档
 
-- 文档索引：[docs/文档索引.md](docs/文档索引.md)
+- 文档入口：[docs/README.md](docs/README.md)
 - 用户使用指南：[docs/用户使用指南.md](docs/用户使用指南.md)
+- 当前架构：[docs/仓库架构V1.md](docs/仓库架构V1.md)
+- 下一版架构：[docs/仓库架构V2.md](docs/仓库架构V2.md)
 - JSON API 契约：[docs/openapi/README.md](docs/openapi/README.md)
 - S3 设计方案：[docs/S3设计方案.md](docs/S3设计方案.md)
 - 部署手册：[docs/部署手册.md](docs/部署手册.md)
-- 容灾方案：[docs/容灾方案.md](docs/容灾方案.md)
+- 多副本方案：[docs/多副本方案.md](docs/多副本方案.md)
 - 额度管理：[docs/额度管理方案.md](docs/额度管理方案.md)
 
 README 只覆盖本地开发、调试和最短启动路径。  
