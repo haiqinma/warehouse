@@ -15,6 +15,13 @@ type fakeReplicationLifecycleRepository struct {
 	outboxCutoff time.Time
 }
 
+func (r *fakeReplicationLifecycleRepository) PreviewHistoryCleanup(_ context.Context, itemCutoff, jobCutoff, outboxCutoff time.Time) (*replication.LifecycleCleanupResult, error) {
+	r.itemCutoff = itemCutoff
+	r.jobCutoff = jobCutoff
+	r.outboxCutoff = outboxCutoff
+	return &replication.LifecycleCleanupResult{DeletedReconcileItems: 6, DeletedReconcileJobs: 4, DeletedOutboxEvents: 2}, nil
+}
+
 func (r *fakeReplicationLifecycleRepository) CleanupHistory(_ context.Context, itemCutoff, jobCutoff, outboxCutoff time.Time) (*replication.LifecycleCleanupResult, error) {
 	r.itemCutoff = itemCutoff
 	r.jobCutoff = jobCutoff
@@ -61,5 +68,24 @@ func TestReplicationLifecycleCleanerEnabledOnlyOnActive(t *testing.T) {
 	cfg.Replication.LifecycleCleanupEnabled = false
 	if cleaner.Enabled() {
 		t.Fatal("expected cleaner disabled by config")
+	}
+}
+
+func TestReplicationLifecycleCleanerPreviewOnceUsesConfiguredRetention(t *testing.T) {
+	cfg := config.DefaultConfig()
+	repo := &fakeReplicationLifecycleRepository{}
+	cleaner := NewReplicationLifecycleCleaner(cfg, repo, nil)
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	cleaner.now = func() time.Time { return now }
+
+	result, err := cleaner.PreviewOnce(context.Background())
+	if err != nil {
+		t.Fatalf("PreviewOnce: %v", err)
+	}
+	if result.DeletedReconcileItems != 6 || result.DeletedReconcileJobs != 4 || result.DeletedOutboxEvents != 2 {
+		t.Fatalf("unexpected preview result: %#v", result)
+	}
+	if !repo.itemCutoff.Equal(now.Add(-cfg.Replication.ReconcileItemRetention)) || !repo.jobCutoff.Equal(now.Add(-cfg.Replication.ReconcileJobRetention)) || !repo.outboxCutoff.Equal(now.Add(-cfg.Replication.OutboxRetention)) {
+		t.Fatalf("unexpected preview cutoffs: item=%v job=%v outbox=%v", repo.itemCutoff, repo.jobCutoff, repo.outboxCutoff)
 	}
 }

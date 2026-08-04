@@ -111,6 +111,42 @@ func TestPostgresReplicationReconcileRepositoryCleanupHistory(t *testing.T) {
 	}
 }
 
+func TestPostgresReplicationReconcileRepositoryPreviewHistoryCleanup(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	repo := NewPostgresReplicationReconcileRepository(db)
+	itemCutoff := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	jobCutoff := time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
+	outboxCutoff := itemCutoff
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\).*FROM replication_reconcile_items").
+		WithArgs(replication.ReconcileJobStatusRunning, itemCutoff).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(30)))
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\).*FROM replication_reconcile_jobs").
+		WithArgs(replication.ReconcileJobStatusRunning, jobCutoff).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(4)))
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\).*FROM replication_outbox").
+		WithArgs(outboxCutoff).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(12)))
+	mock.ExpectCommit()
+
+	result, err := repo.PreviewHistoryCleanup(context.Background(), itemCutoff, jobCutoff, outboxCutoff)
+	if err != nil {
+		t.Fatalf("PreviewHistoryCleanup: %v", err)
+	}
+	if result.DeletedReconcileItems != 30 || result.DeletedReconcileJobs != 4 || result.DeletedOutboxEvents != 12 {
+		t.Fatalf("unexpected preview result: %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestPostgresReplicationOutboxRepositoryAppendBatch(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

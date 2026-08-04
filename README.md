@@ -239,6 +239,8 @@ cd ..
 ./build/warehouse ha reconcile start -c config.yaml --target-node-id warehouse-standby-1
 ./build/warehouse ha reconcile status -c config.yaml --target-node-id warehouse-standby-1
 ./build/warehouse ha bootstrap mark -c config.yaml --peer --target-node-id warehouse-standby-1 --outbox-id 123
+./build/warehouse ha cleanup history -c config.yaml --dry-run
+./build/warehouse ha cleanup history -c config.yaml
 ```
 
 补充说明：
@@ -335,7 +337,8 @@ psql -h 127.0.0.1 -p 5432 -U postgres -d warehouse
 - 文档入口：[docs/README.md](docs/README.md)
 - 用户使用指南：[docs/用户使用指南.md](docs/用户使用指南.md)
 - 当前架构：[docs/仓库架构V1.md](docs/仓库架构V1.md)
-- 下一版架构：[docs/仓库架构V2.md](docs/仓库架构V2.md)
+- V2 已实现架构：[docs/仓库架构V2.md](docs/仓库架构V2.md)
+- 下一版架构：[docs/仓库架构V3.md](docs/仓库架构V3.md)
 - JSON API 契约：[docs/openapi/README.md](docs/openapi/README.md)
 - S3 设计方案：[docs/S3设计方案.md](docs/S3设计方案.md)
 - 部署手册：[docs/部署手册.md](docs/部署手册.md)

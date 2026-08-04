@@ -111,7 +111,7 @@ type ReconcileItem struct {
 
 // LifecycleCleanupResult summarizes one replication-history cleanup pass.
 type LifecycleCleanupResult struct {
-	DeletedReconcileItems int64
-	DeletedReconcileJobs  int64
-	DeletedOutboxEvents   int64
+	DeletedReconcileItems int64 `json:"reconcileItems"`
+	DeletedReconcileJobs  int64 `json:"reconcileJobs"`
+	DeletedOutboxEvents   int64 `json:"outboxEvents"`
 }

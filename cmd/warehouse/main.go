@@ -299,6 +299,7 @@ func printHelp(flags *pflag.FlagSet) {
 	fmt.Println()
 	fmt.Println("  # Show HA status")
 	fmt.Println("  warehouse ha status -c config.yaml")
+	fmt.Println("  warehouse ha cleanup history -c config.yaml --dry-run")
 	fmt.Println()
 	fmt.Println("  # Check quota drift for one user")
 	fmt.Println("  warehouse quota check -c config.yaml --username alice")
