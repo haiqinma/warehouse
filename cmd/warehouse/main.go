@@ -116,6 +116,9 @@ func runServer(args []string) {
 	if c.ReplicationWorker != nil && c.ReplicationWorker.Enabled() {
 		startBackground(c.ReplicationWorker.Run)
 	}
+	if c.ReplicationCleaner != nil && c.ReplicationCleaner.Enabled() {
+		startBackground(c.ReplicationCleaner.Run)
+	}
 	if c.QuotaReconciler != nil && c.QuotaReconciler.Enabled() {
 		startBackground(c.QuotaReconciler.Run)
 	}
@@ -302,6 +305,9 @@ func printHelp(flags *pflag.FlagSet) {
 	fmt.Println()
 	fmt.Println("  # Backfill recycle is_dir for historical rows")
 	fmt.Println("  warehouse recycle backfill-is-dir -c config.yaml --dry-run")
+	fmt.Println()
+	fmt.Println("  # Clean historical sync artifacts from recycle")
+	fmt.Println("  warehouse recycle clean-sync-artifacts -c config.yaml --dry-run")
 }
 
 func runReadinessCheck(cfg *config.Config) error {

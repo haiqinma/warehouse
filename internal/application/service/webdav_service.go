@@ -56,6 +56,7 @@ type usedSpaceMutation struct {
 	targetPath     string
 	sourcePath     string
 	existingTarget int64
+	copyDelta      int64
 }
 
 // statusRecorder 记录响应状态码
@@ -506,6 +507,12 @@ func shouldHardDeleteSyncArtifact(normalizedPath string) bool {
 	return isEphemeralSyncArtifactPath(normalizedPath)
 }
 
+// IsEphemeralSyncArtifactPath reports whether a logical WebDAV path is an
+// internal sync artifact that should not enter user-facing lifecycle flows.
+func IsEphemeralSyncArtifactPath(normalizedPath string) bool {
+	return isEphemeralSyncArtifactPath(normalizedPath)
+}
+
 // moveToRecycle 将文件移动到回收站并保存记录
 func (s *WebDAVService) moveToRecycle(ctx context.Context, u *user.User, relativePath, fullPath string, isDir bool) (bool, error) {
 	// 获取文件信息
@@ -650,19 +657,7 @@ func (s *WebDAVService) estimateQuotaAdditionalSize(u *user.User, r *http.Reques
 			return 0, fmt.Errorf("missing Destination header for COPY")
 		}
 		targetPath := s.resolveUserFullPath(userDir, destination)
-
-		sourceSize, err := calculatePathSize(sourcePath)
-		if err != nil {
-			return 0, err
-		}
-		targetSize, err := getExistingPathSize(targetPath)
-		if err != nil {
-			return 0, err
-		}
-		if sourceSize <= targetSize {
-			return 0, nil
-		}
-		return sourceSize - targetSize, nil
+		return estimateCopyQuotaDelta(sourcePath, targetPath)
 	default:
 		return 0, nil
 	}
@@ -761,6 +756,67 @@ func calculatePathSize(targetPath string) (int64, error) {
 		return 0, err
 	}
 	return totalSize, nil
+}
+
+func estimateCopyQuotaDelta(sourcePath, targetPath string) (int64, error) {
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		return 0, err
+	}
+	if !sourceInfo.IsDir() {
+		targetSize, err := getExistingFileSize(targetPath)
+		if err != nil {
+			return 0, err
+		}
+		if sourceInfo.Size() <= targetSize {
+			return 0, nil
+		}
+		return sourceInfo.Size() - targetSize, nil
+	}
+
+	if targetInfo, err := os.Stat(targetPath); err == nil && !targetInfo.IsDir() {
+		sourceSize, err := calculatePathSize(sourcePath)
+		if err != nil {
+			return 0, err
+		}
+		if sourceSize <= targetInfo.Size() {
+			return 0, nil
+		}
+		return sourceSize - targetInfo.Size(), nil
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, fmt.Errorf("stat copy target: %w", err)
+	}
+
+	var delta int64
+	err = filepath.WalkDir(sourcePath, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if current == sourcePath || entry.IsDir() {
+			return nil
+		}
+		sourceFileInfo, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(sourcePath, current)
+		if err != nil {
+			return err
+		}
+		targetFile := filepath.Join(targetPath, rel)
+		targetSize, err := getExistingFileSize(targetFile)
+		if err != nil {
+			return err
+		}
+		if sourceFileInfo.Size() > targetSize {
+			delta += sourceFileInfo.Size() - targetSize
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return delta, nil
 }
 
 // bodyReader 用于重新读取 body
@@ -1084,11 +1140,11 @@ func (s *WebDAVService) prepareUsedSpaceMutation(u *user.User, userDir string, r
 			return nil, fmt.Errorf("missing Destination header for COPY")
 		}
 		mutation.targetPath = s.resolveUserFullPath(userDir, destination)
-		size, err := getExistingPathSize(mutation.targetPath)
+		delta, err := estimateCopyQuotaDelta(mutation.sourcePath, mutation.targetPath)
 		if err != nil {
 			return nil, err
 		}
-		mutation.existingTarget = size
+		mutation.copyDelta = delta
 	}
 
 	return mutation, nil
@@ -1111,12 +1167,7 @@ func (s *WebDAVService) applyUsedSpaceMutation(ctx context.Context, u *user.User
 		}
 		delta = newSize - mutation.existingTarget
 	case "COPY":
-		newSize, calcErr := getExistingPathSize(mutation.targetPath)
-		if calcErr != nil {
-			err = calcErr
-			break
-		}
-		delta = newSize - mutation.existingTarget
+		delta = mutation.copyDelta
 	default:
 		return
 	}

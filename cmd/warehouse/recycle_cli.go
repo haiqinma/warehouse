@@ -7,11 +7,13 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
+	appservice "github.com/yeying-community/warehouse/internal/application/service"
 	"github.com/yeying-community/warehouse/internal/infrastructure/config"
 	"github.com/yeying-community/warehouse/internal/infrastructure/database"
 )
@@ -19,11 +21,13 @@ import (
 type recycleBackfillItem struct {
 	ID        string
 	Hash      string
+	UserID    string
 	Username  string
 	Directory string
 	Name      string
 	Path      string
 	IsDir     bool
+	Size      int64
 	DeletedAt time.Time
 }
 
@@ -36,6 +40,8 @@ func runRecycleCommand(args []string) error {
 	switch args[0] {
 	case "backfill-is-dir":
 		return runRecycleBackfillIsDir(args[1:])
+	case "clean-sync-artifacts":
+		return runRecycleCleanSyncArtifacts(args[1:])
 	case "-h", "--help", "help":
 		printRecycleHelp()
 		return nil
@@ -47,6 +53,7 @@ func runRecycleCommand(args []string) error {
 func printRecycleHelp() {
 	fmt.Println("Usage:")
 	fmt.Println("  warehouse recycle backfill-is-dir -c config.yaml [--dry-run] [--limit N]")
+	fmt.Println("  warehouse recycle clean-sync-artifacts -c config.yaml [--dry-run] [--limit N]")
 }
 
 func runRecycleBackfillIsDir(args []string) error {
@@ -120,15 +127,98 @@ func runRecycleBackfillIsDir(args []string) error {
 	}
 
 	printPrettyJSONFromAny(map[string]any{
-		"command":          "recycle backfill-is-dir",
-		"dry_run":          *dryRun,
-		"recycle_dir":      recycleDir,
-		"scanned":          len(items),
-		"updated":          updated,
-		"unchanged":        unchanged,
-		"unresolved":       unresolved,
-		"skipped_missing":  skippedMissing,
+		"command":           "recycle backfill-is-dir",
+		"dry_run":           *dryRun,
+		"recycle_dir":       recycleDir,
+		"scanned":           len(items),
+		"updated":           updated,
+		"unchanged":         unchanged,
+		"unresolved":        unresolved,
+		"skipped_missing":   skippedMissing,
 		"legacy_candidates": len(legacyFiles),
+	})
+	return nil
+}
+
+func runRecycleCleanSyncArtifacts(args []string) error {
+	flags := pflag.NewFlagSet("recycle-clean-sync-artifacts", pflag.ContinueOnError)
+	flags.StringP("config", "c", "", "Config file path")
+	flags.BoolP("help", "h", false, "Show help")
+	dryRun := flags.Bool("dry-run", false, "Only show what would be deleted")
+	limit := flags.Int("limit", 0, "Only process the first N recycle records")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if help, _ := flags.GetBool("help"); help {
+		fmt.Println("Usage:")
+		fmt.Println("  warehouse recycle clean-sync-artifacts -c config.yaml [--dry-run] [--limit N]")
+		return nil
+	}
+
+	cfg, db, err := buildRecycleDependencies(flags)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	items, err := loadRecycleBackfillItems(ctx, db.DB, *limit)
+	if err != nil {
+		return err
+	}
+
+	recycleDir := filepath.Join(cfg.WebDAV.Directory, ".recycle")
+	legacyFiles, err := loadLegacyRecycleCandidates(recycleDir)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("scan recycle dir: %w", err)
+	}
+
+	matched := 0
+	deleted := 0
+	fileMissing := 0
+	skipped := 0
+	releasedBytes := int64(0)
+
+	for _, item := range items {
+		if !isRecycleSyncArtifactItem(item) {
+			skipped++
+			continue
+		}
+		matched++
+
+		recyclePath, err := resolveRecycleBackfillPath(recycleDir, legacyFiles, item)
+		switch {
+		case err == nil:
+			if !*dryRun {
+				if err := os.RemoveAll(recyclePath); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("delete recycle file for %s: %w", item.Hash, err)
+				}
+			}
+		case os.IsNotExist(err):
+			fileMissing++
+		default:
+			return fmt.Errorf("resolve recycle path for %s: %w", item.Hash, err)
+		}
+
+		if !*dryRun {
+			if err := deleteRecycleSyncArtifactRecord(ctx, db.DB, item); err != nil {
+				return err
+			}
+		}
+		deleted++
+		releasedBytes += item.Size
+	}
+
+	printPrettyJSONFromAny(map[string]any{
+		"command":        "recycle clean-sync-artifacts",
+		"dry_run":        *dryRun,
+		"recycle_dir":    recycleDir,
+		"scanned":        len(items),
+		"matched":        matched,
+		"deleted":        deleted,
+		"file_missing":   fileMissing,
+		"skipped":        skipped,
+		"released_bytes": releasedBytes,
 	})
 	return nil
 }
@@ -149,7 +239,7 @@ func buildRecycleDependencies(flags *pflag.FlagSet) (*config.Config, *database.P
 
 func loadRecycleBackfillItems(ctx context.Context, db *sql.DB, limit int) ([]recycleBackfillItem, error) {
 	query := `
-		SELECT id, hash, username, directory, name, path, is_dir, deleted_at
+		SELECT id, hash, user_id, username, directory, name, path, is_dir, size, deleted_at
 		FROM recycle_items
 		ORDER BY deleted_at DESC
 	`
@@ -172,11 +262,13 @@ func loadRecycleBackfillItems(ctx context.Context, db *sql.DB, limit int) ([]rec
 		if err := rows.Scan(
 			&item.ID,
 			&item.Hash,
+			&item.UserID,
 			&item.Username,
 			&item.Directory,
 			&item.Name,
 			&item.Path,
 			&item.IsDir,
+			&item.Size,
 			&item.DeletedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan recycle item: %w", err)
@@ -194,6 +286,49 @@ func updateRecycleItemIsDir(ctx context.Context, db *sql.DB, hash string, isDir 
 		return fmt.Errorf("update recycle item %s is_dir: %w", hash, err)
 	}
 	return nil
+}
+
+func deleteRecycleSyncArtifactRecord(ctx context.Context, db *sql.DB, item recycleBackfillItem) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin recycle sync artifact cleanup: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM recycle_items WHERE hash = $1`, item.Hash); err != nil {
+		return fmt.Errorf("delete recycle item %s: %w", item.Hash, err)
+	}
+	if item.Size > 0 && strings.TrimSpace(item.UserID) != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE users SET used_space = GREATEST(used_space - $1, 0) WHERE id = $2`, item.Size, item.UserID); err != nil {
+			return fmt.Errorf("release recycle quota for %s: %w", item.Hash, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit recycle sync artifact cleanup: %w", err)
+	}
+	return nil
+}
+
+func isRecycleSyncArtifactItem(item recycleBackfillItem) bool {
+	for _, candidate := range recycleSyncArtifactCandidatePaths(item) {
+		if appservice.IsEphemeralSyncArtifactPath(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func recycleSyncArtifactCandidatePaths(item recycleBackfillItem) []string {
+	candidates := make([]string, 0, 2)
+	if strings.TrimSpace(item.Path) != "" {
+		candidates = append(candidates, item.Path)
+	}
+	if strings.TrimSpace(item.Directory) != "" && strings.TrimSpace(item.Name) != "" {
+		candidates = append(candidates, path.Join("/", filepath.ToSlash(item.Directory), item.Name))
+	}
+	return candidates
 }
 
 func loadLegacyRecycleCandidates(recycleDir string) ([]string, error) {

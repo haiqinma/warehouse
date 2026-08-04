@@ -269,6 +269,133 @@ paths:
                 $ref: "#/components/schemas/AssetSpacesEnvelope"
         "401":
           $ref: "#/components/responses/SDKUnauthorized"
+  /api/v1/public/assets/object:
+    get:
+      tags: [Assets]
+      operationId: getAssetObjectMetadata
+      summary: 获取当前用户资产对象元数据
+      description: |
+        通过 `/personal`、`/apps` 或 `/services` 开头的逻辑路径获取对象元数据。
+        该接口用于 Knowledge 等上层服务读取 Warehouse 原始资产或回写资产的可验证元信息。
+      parameters:
+        - $ref: "#/components/parameters/AssetObjectPath"
+      responses:
+        "200":
+          description: 对象元数据
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AssetObject"}
+        "400": {$ref: "#/components/responses/AssetObjectError"}
+        "401": {$ref: "#/components/responses/AssetObjectError"}
+        "403": {$ref: "#/components/responses/AssetObjectError"}
+        "404": {$ref: "#/components/responses/AssetObjectError"}
+  /api/v1/public/assets/object/content:
+    get:
+      tags: [Assets]
+      operationId: downloadAssetObjectContent
+      summary: 下载当前用户资产对象内容
+      parameters:
+        - $ref: "#/components/parameters/AssetObjectPath"
+      responses:
+        "200":
+          description: 对象内容
+          headers:
+            ETag:
+              schema: {type: string}
+            X-Warehouse-Checksum-SHA256:
+              schema: {type: string}
+            Content-Length:
+              schema: {type: integer, format: int64}
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        "400": {$ref: "#/components/responses/AssetObjectError"}
+        "401": {$ref: "#/components/responses/AssetObjectError"}
+        "403": {$ref: "#/components/responses/AssetObjectError"}
+        "404": {$ref: "#/components/responses/AssetObjectError"}
+    head:
+      tags: [Assets]
+      operationId: headAssetObjectContent
+      summary: 获取当前用户资产对象内容头信息
+      parameters:
+        - $ref: "#/components/parameters/AssetObjectPath"
+      responses:
+        "200":
+          description: 对象头信息
+          headers:
+            ETag:
+              schema: {type: string}
+            X-Warehouse-Checksum-SHA256:
+              schema: {type: string}
+            Content-Length:
+              schema: {type: integer, format: int64}
+        "400": {$ref: "#/components/responses/AssetObjectError"}
+        "401": {$ref: "#/components/responses/AssetObjectError"}
+        "403": {$ref: "#/components/responses/AssetObjectError"}
+        "404": {$ref: "#/components/responses/AssetObjectError"}
+    put:
+      tags: [Assets]
+      operationId: putAssetObjectContent
+      summary: 写入当前用户资产对象内容
+      description: |
+        写入必须落在 `/personal`、`/apps` 或 `/services` 下，并复用现有 quota、
+        mutation recorder 和对象 metadata 逻辑。`X-Warehouse-Checksum-SHA256`
+        可传 hex 或 base64 编码的 SHA-256；提供时必须校验通过。
+      parameters:
+        - $ref: "#/components/parameters/AssetObjectPath"
+        - name: X-Warehouse-Checksum-SHA256
+          in: header
+          required: false
+          schema: {type: string}
+          description: hex 或 base64 编码的 SHA-256 校验值
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
+          text/plain:
+            schema: {type: string}
+          application/json:
+            schema: {}
+      responses:
+        "200":
+          description: 写入成功后的对象元数据
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AssetObject"}
+        "400": {$ref: "#/components/responses/AssetObjectError"}
+        "401": {$ref: "#/components/responses/AssetObjectError"}
+        "403": {$ref: "#/components/responses/AssetObjectError"}
+        "413": {$ref: "#/components/responses/AssetObjectError"}
+  /api/v1/public/assets/objects:
+    get:
+      tags: [Assets]
+      operationId: listAssetObjects
+      summary: 列出当前用户资产对象
+      parameters:
+        - name: prefix
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: "^/(personal|apps|services)(/.*)?$"
+          example: /services/knowledge/
+        - name: delimiter
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["/"]
+          description: 传 `/` 时返回一层 common prefixes
+      responses:
+        "200":
+          description: 对象列表
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AssetObjectList"}
+        "400": {$ref: "#/components/responses/AssetObjectError"}
+        "401": {$ref: "#/components/responses/AssetObjectError"}
+        "403": {$ref: "#/components/responses/AssetObjectError"}
   /api/v1/public/webdav/quota:
     get:
       tags: [User]
@@ -1543,6 +1670,15 @@ components:
             required: [hash]
             properties:
               hash: {type: string, minLength: 1}
+  parameters:
+    AssetObjectPath:
+      name: path
+      in: query
+      required: true
+      schema:
+        type: string
+        pattern: "^/(personal|apps|services)/.+"
+      example: /services/knowledge/artifacts/report.md
   responses:
     SDKBadRequest:
       description: 请求参数无效
@@ -1569,6 +1705,11 @@ components:
       content:
         text/plain:
           schema: {type: string}
+    AssetObjectError:
+      description: 资产对象接口错误
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/AssetObjectError"}
     MessageResponse:
       description: 操作成功
       content:
@@ -1737,6 +1878,46 @@ components:
                 spaces:
                   type: array
                   items: {$ref: "#/components/schemas/AssetSpace"}
+    AssetObject:
+      type: object
+      required: [path, bucket, key, size, etag, contentType, modifiedAt, isPrefix]
+      properties:
+        path:
+          type: string
+          pattern: "^/(personal|apps|services)/.+"
+        bucket:
+          type: string
+          enum: [personal, apps, services]
+        key: {type: string}
+        size: {type: integer, format: int64, minimum: 0}
+        etag: {type: string}
+        checksumSha256:
+          type: string
+          description: hex 编码的 SHA-256，仅单对象 metadata、download、write 响应返回
+        contentType: {type: string}
+        modifiedAt: {type: string, format: date-time}
+        isPrefix: {type: boolean}
+    AssetObjectList:
+      type: object
+      required: [prefix, objects, prefixes]
+      properties:
+        prefix:
+          type: string
+          pattern: "^/(personal|apps|services)(/.*)?$"
+        objects:
+          type: array
+          items: {$ref: "#/components/schemas/AssetObject"}
+        prefixes:
+          type: array
+          items:
+            type: string
+            pattern: "^/(personal|apps|services)/.*"
+    AssetObjectError:
+      type: object
+      required: [code, message]
+      properties:
+        code: {type: string}
+        message: {type: string}
     Quota:
       type: object
       required: [quota, used, available, percentage, unlimited]
@@ -1942,7 +2123,7 @@ components:
         regex: {type: boolean}
     AdminUser:
       type: object
-      required: [id, username, directory, permissions, quota, used_space, has_password]
+      required: [id, username, directory, permissions, quota, used_space, quota_status, has_password]
       properties:
         id: {type: string, format: uuid}
         username: {type: string}
@@ -1954,6 +2135,10 @@ components:
           items: {$ref: "#/components/schemas/Permission"}
         quota: {type: integer, format: int64, minimum: 0}
         used_space: {type: integer, format: int64, minimum: 0}
+        quota_status:
+          type: string
+          enum: [unlimited, over_quota, near_limit, ok]
+        quota_usage_percent: {type: number, format: double, minimum: 0}
         rules:
           type: array
           items: {$ref: "#/components/schemas/AdminRule"}

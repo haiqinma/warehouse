@@ -20,6 +20,7 @@ type Router struct {
 	web3Handler                *handler.Web3Handler
 	emailAuthHandler           *handler.EmailAuthHandler
 	assetsHandler              *handler.AssetsHandler
+	assetObjectHandler         *handler.AssetObjectHandler
 	webdavHandler              *handler.WebDAVHandler
 	quotaHandler               *handler.QuotaHandler
 	userHandler                *handler.UserHandler
@@ -44,6 +45,7 @@ func NewRouter(
 	web3Handler *handler.Web3Handler,
 	emailAuthHandler *handler.EmailAuthHandler,
 	assetsHandler *handler.AssetsHandler,
+	assetObjectHandler *handler.AssetObjectHandler,
 	webdavHandler *handler.WebDAVHandler,
 	quotaHandler *handler.QuotaHandler,
 	userHandler *handler.UserHandler,
@@ -66,6 +68,7 @@ func NewRouter(
 		web3Handler:                web3Handler,
 		emailAuthHandler:           emailAuthHandler,
 		assetsHandler:              assetsHandler,
+		assetObjectHandler:         assetObjectHandler,
 		webdavHandler:              webdavHandler,
 		quotaHandler:               quotaHandler,
 		userHandler:                userHandler,
@@ -112,6 +115,11 @@ func (r *Router) Setup() http.Handler {
 	// API 路由（需要认证）
 	if r.assetsHandler != nil {
 		mux.Handle("/api/v1/public/assets/spaces", r.createAuthenticatedHandler(http.HandlerFunc(r.assetsHandler.GetSpaces)))
+	}
+	if r.assetObjectHandler != nil {
+		mux.Handle("/api/v1/public/assets/object", r.createAuthenticatedHandler(http.HandlerFunc(r.assetObjectHandler.HandleObject)))
+		mux.Handle("/api/v1/public/assets/object/content", r.createAuthenticatedHandler(http.HandlerFunc(r.assetObjectHandler.HandleObjectContent)))
+		mux.Handle("/api/v1/public/assets/objects", r.createAuthenticatedHandler(http.HandlerFunc(r.assetObjectHandler.HandleObjects)))
 	}
 	mux.Handle("/api/v1/public/webdav/quota", r.createAuthenticatedHandler(http.HandlerFunc(r.quotaHandler.GetUserQuota)))
 	mux.Handle("/api/v1/public/webdav/user/info", r.createAuthenticatedHandler(http.HandlerFunc(r.userHandler.GetUserInfo)))

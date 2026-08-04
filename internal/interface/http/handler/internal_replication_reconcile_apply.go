@@ -214,6 +214,9 @@ func (h *InternalReplicationHandler) sendReconcileBatch(
 	if err != nil {
 		return fmt.Errorf("marshal reconcile batch request: %w", err)
 	}
+	if err := h.throttleReconcileBytes(ctx, len(body)); err != nil {
+		return fmt.Errorf("throttle reconcile batch: %w", err)
+	}
 
 	requestURL := strings.TrimRight(baseURL, "/") + "/api/v1/internal/replication/reconcile/apply-batch"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))

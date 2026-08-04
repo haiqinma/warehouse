@@ -168,3 +168,60 @@ func TestQuotaReconcilerLogsNearLimitAndOverQuotaRisk(t *testing.T) {
 		t.Fatalf("expected one over quota log, got %d", recorded.FilterMessage("quota user exceeded storage limit").Len())
 	}
 }
+
+func TestQuotaReconcilerLogsBatchSummary(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	cfg := &config.Config{
+		Node: config.NodeConfig{
+			Role: "active",
+		},
+		Quota: config.QuotaConfig{
+			AutoReconcileEnabled:   true,
+			AutoReconcileInterval:  1,
+			AutoReconcileBatchSize: 2,
+		},
+		WebDAV: config.WebDAVConfig{
+			Directory: rootDir,
+		},
+	}
+
+	userRepo := newTestUserRepo()
+	for _, name := range []string{"alice", "bob", "carol"} {
+		u := user.NewUser(name, name)
+		u.Directory = name
+		u.Quota = 0
+		if err := userRepo.Save(context.Background(), u); err != nil {
+			t.Fatalf("save user %s: %v", name, err)
+		}
+	}
+
+	core, recorded := observer.New(zap.InfoLevel)
+	reconciler := NewQuotaReconciler(
+		cfg,
+		userRepo,
+		&memoryRecycleRepo{items: map[string]*recycle.RecycleItem{}},
+		quota.NewService(userRepo),
+		zap.New(core),
+	)
+
+	if err := reconciler.ReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("reconcile once: %v", err)
+	}
+
+	entries := recorded.FilterMessage("quota reconcile pass finished").All()
+	if len(entries) != 1 {
+		t.Fatalf("expected one pass summary log, got %d", len(entries))
+	}
+	fields := entries[0].ContextMap()
+	if fields["checked_count"] != int64(3) {
+		t.Fatalf("expected checked_count=3, got %#v", fields["checked_count"])
+	}
+	if fields["failed_count"] != int64(0) {
+		t.Fatalf("expected failed_count=0, got %#v", fields["failed_count"])
+	}
+	if fields["batch_size"] != int64(2) {
+		t.Fatalf("expected batch_size=2, got %#v", fields["batch_size"])
+	}
+}

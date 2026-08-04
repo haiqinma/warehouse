@@ -83,19 +83,86 @@ func TestValidateReplicationActiveAllowsDynamicPeerDiscovery(t *testing.T) {
 }
 
 func TestValidateReplicationRejectsInvalidWorkerSettings(t *testing.T) {
-	loader := NewLoader()
-	cfg := DefaultConfig()
-	cfg.Node.ID = "node-a"
-	cfg.Node.Role = "active"
-	cfg.Replication.Enabled = true
-	cfg.Replication.SharedSecret = "secret"
-	cfg.Replication.AllowedClockSkew = time.Minute
-	cfg.Replication.BatchSize = 0
-
-	if err := loader.validateNode(cfg); err != nil {
-		t.Fatalf("validateNode failed: %v", err)
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{
+			name: "batch size",
+			mutate: func(cfg *Config) {
+				cfg.Replication.BatchSize = 0
+			},
+		},
+		{
+			name: "reconcile max concurrency",
+			mutate: func(cfg *Config) {
+				cfg.Replication.ReconcileMaxConcurrency = 0
+			},
+		},
+		{
+			name: "reconcile bandwidth limit",
+			mutate: func(cfg *Config) {
+				cfg.Replication.ReconcileBandwidthLimitBPS = -1
+			},
+		},
 	}
-	if err := loader.validateReplication(cfg); err == nil {
-		t.Fatalf("expected invalid worker setting to be rejected")
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			loader := NewLoader()
+			cfg := DefaultConfig()
+			cfg.Node.ID = "node-a"
+			cfg.Node.Role = "active"
+			cfg.Replication.Enabled = true
+			cfg.Replication.SharedSecret = "secret"
+			cfg.Replication.AllowedClockSkew = time.Minute
+			tc.mutate(cfg)
+
+			if err := loader.validateNode(cfg); err != nil {
+				t.Fatalf("validateNode failed: %v", err)
+			}
+			if err := loader.validateReplication(cfg); err == nil {
+				t.Fatalf("expected invalid worker setting to be rejected")
+			}
+		})
+	}
+}
+
+func TestValidateQuotaRejectsInvalidAutoReconcileSettings(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{
+			name: "interval",
+			mutate: func(cfg *Config) {
+				cfg.Quota.AutoReconcileInterval = 0
+			},
+		},
+		{
+			name: "batch size",
+			mutate: func(cfg *Config) {
+				cfg.Quota.AutoReconcileBatchSize = 0
+			},
+		},
+		{
+			name: "batch pause",
+			mutate: func(cfg *Config) {
+				cfg.Quota.AutoReconcileBatchPause = -time.Second
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			loader := NewLoader()
+			cfg := DefaultConfig()
+			cfg.Quota.AutoReconcileEnabled = true
+			tc.mutate(cfg)
+
+			if err := loader.validateQuota(cfg); err == nil {
+				t.Fatalf("expected invalid quota setting to be rejected")
+			}
+		})
 	}
 }

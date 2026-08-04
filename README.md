@@ -95,6 +95,8 @@ cp config.yaml.template config.yaml
 
 - `quota.auto_reconcile_enabled`
 - `quota.auto_reconcile_interval`
+- `quota.auto_reconcile_batch_size`
+- `quota.auto_reconcile_batch_pause`
 
 如果要本地验证 active / standby 复制，还需要确认：
 
@@ -193,6 +195,7 @@ curl -u <username>:<password> http://127.0.0.1:6065/dav/demo/hello.txt
 - `replication.shared_secret`：active / standby 必须一致
 - `replication.retry_backoff_base` / `replication.max_retry_backoff`：同时影响 outbox 重试和 assignment error 自动恢复
 - `replication.reconcile_auto_pause_failures`：连续 `reconcile` 失败达到阈值后自动切到 `paused`，默认 `3`，设为 `0` 表示关闭自动暂停
+- `replication.lifecycle_cleanup_*` / `*_retention`：控制 active 节点的 generation 历史清理；默认每 `24h` 执行，outbox / reconcile item 保留 7 天，job 摘要保留 30 天
 
 ## 本地开发与调试
 
@@ -329,12 +332,14 @@ psql -h 127.0.0.1 -p 5432 -U postgres -d warehouse
 
 ## 相关文档
 
-- 文档索引：[docs/文档索引.md](docs/文档索引.md)
+- 文档入口：[docs/README.md](docs/README.md)
 - 用户使用指南：[docs/用户使用指南.md](docs/用户使用指南.md)
+- 当前架构：[docs/仓库架构V1.md](docs/仓库架构V1.md)
+- 下一版架构：[docs/仓库架构V2.md](docs/仓库架构V2.md)
 - JSON API 契约：[docs/openapi/README.md](docs/openapi/README.md)
 - S3 设计方案：[docs/S3设计方案.md](docs/S3设计方案.md)
 - 部署手册：[docs/部署手册.md](docs/部署手册.md)
-- 容灾方案：[docs/容灾方案.md](docs/容灾方案.md)
+- 多副本方案：[docs/多副本方案.md](docs/多副本方案.md)
 - 额度管理：[docs/额度管理方案.md](docs/额度管理方案.md)
 
 README 只覆盖本地开发、调试和最短启动路径。  
@@ -346,8 +351,10 @@ README 只覆盖本地开发、调试和最短启动路径。
 
 - `quota.auto_reconcile_enabled=true`
 - `quota.auto_reconcile_interval=6h`
+- `quota.auto_reconcile_batch_size=100`
+- `quota.auto_reconcile_batch_pause=0s`
 
-系统会在后台周期性重算所有用户的 `used_space`，自动修正“主路径增量记账”长期运行后的统计漂移。该任务默认关闭，只在非 `standby` 节点运行。
+系统会在后台周期性分批重算所有用户的 `used_space`，自动修正“主路径增量记账”长期运行后的统计漂移。该任务默认关闭，只在非 `standby` 节点运行。
 
 查看某个用户当前记录值与重算值是否一致：
 
@@ -359,4 +366,11 @@ README 只覆盖本地开发、调试和最短启动路径。
 
 ```bash
 ./bin/warehouse quota rebuild -c config.yaml --username alice
+```
+
+清理历史误入回收站的 WebDAV 同步运行态对象：
+
+```bash
+./bin/warehouse recycle clean-sync-artifacts -c config.yaml --dry-run
+./bin/warehouse recycle clean-sync-artifacts -c config.yaml
 ```

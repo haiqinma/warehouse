@@ -62,15 +62,24 @@ type ReplicationConfig struct {
 	DispatchInterval           time.Duration `yaml:"dispatch_interval"`
 	RequestTimeout             time.Duration `yaml:"request_timeout"`
 	BatchSize                  int           `yaml:"batch_size"`
+	ReconcileMaxConcurrency    int           `yaml:"reconcile_max_concurrency"`
+	ReconcileBandwidthLimitBPS int64         `yaml:"reconcile_bandwidth_limit_bytes_per_second"`
 	RetryBackoffBase           time.Duration `yaml:"retry_backoff_base"`
 	MaxRetryBackoff            time.Duration `yaml:"max_retry_backoff"`
 	ReconcileAutoPauseFailures int           `yaml:"reconcile_auto_pause_failures"`
+	LifecycleCleanupEnabled    bool          `yaml:"lifecycle_cleanup_enabled"`
+	LifecycleCleanupInterval   time.Duration `yaml:"lifecycle_cleanup_interval"`
+	OutboxRetention            time.Duration `yaml:"outbox_retention"`
+	ReconcileItemRetention     time.Duration `yaml:"reconcile_item_retention"`
+	ReconcileJobRetention      time.Duration `yaml:"reconcile_job_retention"`
 }
 
 // QuotaConfig 配额后台巡检配置
 type QuotaConfig struct {
-	AutoReconcileEnabled  bool          `yaml:"auto_reconcile_enabled"`
-	AutoReconcileInterval time.Duration `yaml:"auto_reconcile_interval"`
+	AutoReconcileEnabled    bool          `yaml:"auto_reconcile_enabled"`
+	AutoReconcileInterval   time.Duration `yaml:"auto_reconcile_interval"`
+	AutoReconcileBatchSize  int           `yaml:"auto_reconcile_batch_size"`
+	AutoReconcileBatchPause time.Duration `yaml:"auto_reconcile_batch_pause"`
 }
 
 // S3Config controls the optional S3-compatible endpoint. Values in the YAML
@@ -210,13 +219,22 @@ func DefaultConfig() *Config {
 			DispatchInterval:           2 * time.Second,
 			RequestTimeout:             30 * time.Second,
 			BatchSize:                  32,
+			ReconcileMaxConcurrency:    1,
+			ReconcileBandwidthLimitBPS: 0,
 			RetryBackoffBase:           2 * time.Second,
 			MaxRetryBackoff:            5 * time.Minute,
 			ReconcileAutoPauseFailures: 3,
+			LifecycleCleanupEnabled:    true,
+			LifecycleCleanupInterval:   24 * time.Hour,
+			OutboxRetention:            7 * 24 * time.Hour,
+			ReconcileItemRetention:     7 * 24 * time.Hour,
+			ReconcileJobRetention:      30 * 24 * time.Hour,
 		},
 		Quota: QuotaConfig{
-			AutoReconcileEnabled:  false,
-			AutoReconcileInterval: 6 * time.Hour,
+			AutoReconcileEnabled:    false,
+			AutoReconcileInterval:   6 * time.Hour,
+			AutoReconcileBatchSize:  100,
+			AutoReconcileBatchPause: 0,
 		},
 		S3: S3Config{
 			Enabled:         false,

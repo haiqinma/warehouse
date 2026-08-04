@@ -4,7 +4,7 @@ import { storeToRefs } from 'pinia'
 import { ArrowLeft, ArrowRight, ArrowUp, Delete, Expand, Fold, Folder, FolderAdd, FolderOpened, Grid, Refresh, Upload, DocumentCopy, Share, Search, MoreFilled, Notebook, User, Lock, Unlock } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { getSupportedCipherSuites, type CipherSuiteInfo } from '@yeying-community/web3-bs'
-import { quotaApi, userApi, recycleApi, shareApi, directShareApi, assetsApi, webdavAccessKeyApi, s3CredentialApi, adminUserApi, type RecycleItem, type ShareItem, type DirectShareItem, type AssetSpaceInfo, type ShareExpiryUnit, type ShareMode, type AccessKeyPermission, type WebDAVAccessKeyItem, type CreateWebDAVAccessKeyResult, type S3CredentialItem, type CreateS3CredentialResult, type AdminUserItem } from '@/api'
+import { quotaApi, userApi, recycleApi, shareApi, directShareApi, assetsApi, webdavAccessKeyApi, s3CredentialApi, adminUserApi, type RecycleItem, type ShareItem, type DirectShareItem, type AssetSpaceInfo, type ShareExpiryUnit, type ShareMode, type AccessKeyPermission, type WebDAVAccessKeyItem, type CreateWebDAVAccessKeyResult, type S3CredentialItem, type CreateS3CredentialResult, type AdminUserItem, type GroupMember } from '@/api'
 import { AUTH_CHANGED_EVENT, isLoggedIn, getUsername, getWalletName, getCurrentAccount, getUserPermissions, getUserCreatedAt, loginWithWallet, focusPendingWalletApproval, loginWithPassword, sendEmailCode, loginWithEmailCode, getAccountHistory, watchWalletAccounts, watchWalletProvider } from '@/plugins/auth'
 import { decryptBlobContent, encryptFileContent, encryptTextContent } from '@/utils/crypto'
 import {
@@ -172,6 +172,7 @@ const s3CredentialDirectory = ref('')
 const accessKeyForm = ref(createDefaultAccessKeyForm('/'))
 const groupStore = useGroupStore()
 const { groupLoading, managedGroups, activeGroupMembers } = storeToRefs(groupStore)
+const shareAddressMembers = computed(() => dedupeGroupMembersByWalletAddress(activeGroupMembers.value))
 const uploadTaskStore = useUploadTaskStore()
 const editingUsername = ref(false)
 const usernameDraft = ref('')
@@ -593,8 +594,29 @@ const selectedGroupMembers = computed(() => {
     shareUserForm.value.groupIds.map(item => String(item || '').trim())
   )
   if (!groupSet.size) return []
-  return activeGroupMembers.value.filter(item => groupSet.has(String(item.groupId || '').trim()))
+  return dedupeGroupMembersByWalletAddress(
+    activeGroupMembers.value.filter(item => groupSet.has(String(item.groupId || '').trim()))
+  )
 })
+
+function dedupeGroupMembersByWalletAddress(members: GroupMember[]): GroupMember[] {
+  const uniqueMembers = new Map<string, GroupMember>()
+  for (const member of members) {
+    const walletAddress = normalizeWalletAddress(member.walletAddress)
+    const key = walletAddress || `member:${member.id}`
+    const existing = uniqueMembers.get(key)
+    if (!existing || memberDisplayPriority(member) > memberDisplayPriority(existing)) {
+      uniqueMembers.set(key, member)
+    }
+  }
+  return Array.from(uniqueMembers.values())
+}
+
+function memberDisplayPriority(member: GroupMember): number {
+  if (String(member.alias || '').trim()) return 2
+  const name = String(member.name || '').trim()
+  return name && normalizeWalletAddress(name) !== normalizeWalletAddress(member.walletAddress) ? 1 : 0
+}
 const quotaAvailable = computed(() => {
   if (quota.value.unlimited) return null
   const available = Number.isFinite(quota.value.available)
@@ -633,12 +655,9 @@ const quotaAlertState = computed(() => {
 })
 const adminUsersSummary = computed(() => {
   const items = adminUsers.value
-  const limitedUsers = items.filter(item => item.quota > 0)
-  const overQuotaUsers = limitedUsers.filter(item => item.used_space > item.quota)
-  const nearLimitUsers = limitedUsers.filter(item => {
-    if (item.quota <= 0) return false
-    return item.used_space <= item.quota && item.used_space / item.quota >= 0.8
-  })
+  const limitedUsers = items.filter(item => adminUserQuotaStatusValue(item) !== 'unlimited')
+  const overQuotaUsers = items.filter(item => adminUserQuotaStatusValue(item) === 'over_quota')
+  const nearLimitUsers = items.filter(item => adminUserQuotaStatusValue(item) === 'near_limit')
   return {
     total: items.length,
     limited: limitedUsers.length,
@@ -666,11 +685,10 @@ const filteredAdminUsers = computed(() => {
   const filter = adminUsersFilter.value
   const items = [...adminUsers.value]
   const filtered = items.filter(item => {
-    if (filter === 'unlimited') return item.quota === 0
-    if (filter === 'near_limit') {
-      return item.quota > 0 && item.used_space <= item.quota && item.used_space / item.quota >= 0.8
-    }
-    if (filter === 'over_quota') return item.quota > 0 && item.used_space > item.quota
+    const status = adminUserQuotaStatusValue(item)
+    if (filter === 'unlimited') return status === 'unlimited'
+    if (filter === 'near_limit') return status === 'near_limit'
+    if (filter === 'over_quota') return status === 'over_quota'
     return true
   })
   filtered.sort((a, b) => {
@@ -2079,6 +2097,9 @@ function selectAccessKeyDirectoryPickerPath() {
 
 function adminUserUsageRate(item: AdminUserItem): number | null {
   if (!item || item.quota <= 0) return null
+  if (typeof item.quota_usage_percent === 'number') {
+    return item.quota_usage_percent / 100
+  }
   return item.used_space / item.quota
 }
 
@@ -2089,17 +2110,25 @@ function formatAdminUserUsage(item: AdminUserItem): string {
 }
 
 function adminUserQuotaStatus(item: AdminUserItem): { label: string; type: 'info' | 'warning' | 'danger' | 'success' } {
+  switch (adminUserQuotaStatusValue(item)) {
+    case 'unlimited':
+      return { label: '不限额', type: 'info' }
+    case 'over_quota':
+      return { label: '已超额', type: 'danger' }
+    case 'near_limit':
+      return { label: '接近上限', type: 'warning' }
+    default:
+      return { label: '正常', type: 'success' }
+  }
+}
+
+function adminUserQuotaStatusValue(item: AdminUserItem): 'unlimited' | 'over_quota' | 'near_limit' | 'ok' {
+  if (item?.quota_status) return item.quota_status
   const rate = adminUserUsageRate(item)
-  if (rate === null) {
-    return { label: '不限额', type: 'info' }
-  }
-  if (item.used_space > item.quota) {
-    return { label: '已超额', type: 'danger' }
-  }
-  if (rate >= 0.8) {
-    return { label: '接近上限', type: 'warning' }
-  }
-  return { label: '正常', type: 'success' }
+  if (rate === null) return 'unlimited'
+  if (item.used_space > item.quota) return 'over_quota'
+  if (rate >= 0.8) return 'near_limit'
+  return 'ok'
 }
 
 function quotaUnitMultiplier(unit: 'B' | 'KB' | 'MB' | 'GB' | 'TB'): number {
@@ -6892,7 +6921,7 @@ onBeforeUnmount(() => {
         :share-user-submitting="shareUserSubmitting"
         :share-user-target="shareUserTarget"
         :share-user-form="shareUserForm"
-        :group-members="activeGroupMembers"
+        :group-members="shareAddressMembers"
         :managed-groups="managedGroups"
         :selected-group-members="selectedGroupMembers"
         :submit-share-user="submitShareUser"

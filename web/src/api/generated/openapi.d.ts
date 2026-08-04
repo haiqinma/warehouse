@@ -175,6 +175,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/assets/object": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 获取当前用户资产对象元数据
+         * @description 通过 `/personal`、`/apps` 或 `/services` 开头的逻辑路径获取对象元数据。
+         *     该接口用于 Knowledge 等上层服务读取 Warehouse 原始资产或回写资产的可验证元信息。
+         */
+        get: operations["getAssetObjectMetadata"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/assets/object/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 下载当前用户资产对象内容 */
+        get: operations["downloadAssetObjectContent"];
+        /**
+         * 写入当前用户资产对象内容
+         * @description 写入必须落在 `/personal`、`/apps` 或 `/services` 下，并复用现有 quota、
+         *     mutation recorder 和对象 metadata 逻辑。`X-Warehouse-Checksum-SHA256`
+         *     可传 hex 或 base64 编码的 SHA-256；提供时必须校验通过。
+         */
+        put: operations["putAssetObjectContent"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** 获取当前用户资产对象内容头信息 */
+        head: operations["headAssetObjectContent"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/assets/objects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 列出当前用户资产对象 */
+        get: operations["listAssetObjects"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/webdav/quota": {
         parameters: {
             query?: never;
@@ -1452,6 +1514,30 @@ export interface components {
                 spaces: components["schemas"]["AssetSpace"][];
             };
         };
+        AssetObject: {
+            path: string;
+            /** @enum {string} */
+            bucket: "personal" | "apps" | "services";
+            key: string;
+            /** Format: int64 */
+            size: number;
+            etag: string;
+            /** @description hex 编码的 SHA-256，仅单对象 metadata、download、write 响应返回 */
+            checksumSha256?: string;
+            contentType: string;
+            /** Format: date-time */
+            modifiedAt: string;
+            isPrefix: boolean;
+        };
+        AssetObjectList: {
+            prefix: string;
+            objects: components["schemas"]["AssetObject"][];
+            prefixes: string[];
+        };
+        AssetObjectError: {
+            code: string;
+            message: string;
+        };
         Quota: {
             /** Format: int64 */
             quota: number;
@@ -1631,6 +1717,10 @@ export interface components {
             quota: number;
             /** Format: int64 */
             used_space: number;
+            /** @enum {string} */
+            quota_status: "unlimited" | "over_quota" | "near_limit" | "ok";
+            /** Format: double */
+            quota_usage_percent?: number;
             rules?: components["schemas"]["AdminRule"][];
             created_at?: string;
             updated_at?: string;
@@ -1849,6 +1939,15 @@ export interface components {
                 "text/plain": string;
             };
         };
+        /** @description 资产对象接口错误 */
+        AssetObjectError: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AssetObjectError"];
+            };
+        };
         /** @description 操作成功 */
         MessageResponse: {
             headers: {
@@ -1861,7 +1960,10 @@ export interface components {
             };
         };
     };
-    parameters: never;
+    parameters: {
+        /** @example /services/knowledge/artifacts/report.md */
+        AssetObjectPath: string;
+    };
     requestBodies: {
         IDRequest: {
             content: {
@@ -2173,6 +2275,155 @@ export interface operations {
                 };
             };
             401: components["responses"]["SDKUnauthorized"];
+        };
+    };
+    getAssetObjectMetadata: {
+        parameters: {
+            query: {
+                /** @example /services/knowledge/artifacts/report.md */
+                path: components["parameters"]["AssetObjectPath"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 对象元数据 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetObject"];
+                };
+            };
+            400: components["responses"]["AssetObjectError"];
+            401: components["responses"]["AssetObjectError"];
+            403: components["responses"]["AssetObjectError"];
+            404: components["responses"]["AssetObjectError"];
+        };
+    };
+    downloadAssetObjectContent: {
+        parameters: {
+            query: {
+                /** @example /services/knowledge/artifacts/report.md */
+                path: components["parameters"]["AssetObjectPath"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 对象内容 */
+            200: {
+                headers: {
+                    ETag?: string;
+                    "X-Warehouse-Checksum-SHA256"?: string;
+                    "Content-Length"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            400: components["responses"]["AssetObjectError"];
+            401: components["responses"]["AssetObjectError"];
+            403: components["responses"]["AssetObjectError"];
+            404: components["responses"]["AssetObjectError"];
+        };
+    };
+    putAssetObjectContent: {
+        parameters: {
+            query: {
+                /** @example /services/knowledge/artifacts/report.md */
+                path: components["parameters"]["AssetObjectPath"];
+            };
+            header?: {
+                /** @description hex 或 base64 编码的 SHA-256 校验值 */
+                "X-Warehouse-Checksum-SHA256"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+                "text/plain": string;
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description 写入成功后的对象元数据 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetObject"];
+                };
+            };
+            400: components["responses"]["AssetObjectError"];
+            401: components["responses"]["AssetObjectError"];
+            403: components["responses"]["AssetObjectError"];
+            413: components["responses"]["AssetObjectError"];
+        };
+    };
+    headAssetObjectContent: {
+        parameters: {
+            query: {
+                /** @example /services/knowledge/artifacts/report.md */
+                path: components["parameters"]["AssetObjectPath"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 对象头信息 */
+            200: {
+                headers: {
+                    ETag?: string;
+                    "X-Warehouse-Checksum-SHA256"?: string;
+                    "Content-Length"?: number;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["AssetObjectError"];
+            401: components["responses"]["AssetObjectError"];
+            403: components["responses"]["AssetObjectError"];
+            404: components["responses"]["AssetObjectError"];
+        };
+    };
+    listAssetObjects: {
+        parameters: {
+            query: {
+                /** @example /services/knowledge/ */
+                prefix: string;
+                /** @description 传 `/` 时返回一层 common prefixes */
+                delimiter?: "/";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 对象列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetObjectList"];
+                };
+            };
+            400: components["responses"]["AssetObjectError"];
+            401: components["responses"]["AssetObjectError"];
+            403: components["responses"]["AssetObjectError"];
         };
     };
     getCurrentUserQuota: {

@@ -1,0 +1,938 @@
+# Warehouse AI 原生存储产品定位决策分析
+
+日期：2026-07-31
+
+> 文档定位：本文是产品方向的决策分析和论证材料，用于解释 Warehouse 为什么不继续走传统网盘路线，以及为什么要服务 AI / agent 场景。它不是 V2 执行清单。已经收敛的工程边界维护在 [仓库架构V2.md](./仓库架构V2.md)。
+>
+> 2026-08-01 决策更新：验证后确认 Agent Run、Context Manifest、Service Principal 和 Artifact Provenance 属于 Knowledge 的上层业务语义。Warehouse 保持文件/对象、权限、凭证、配额、checksum、WebDAV/S3 和复制等通用存储职责；Knowledge 依赖 Warehouse 保存原始资产、manifest 投影和 artifact 文件。本文中早期的 Agent Workspace 控制面建议已被该决策取代，执行边界以 Knowledge 的 `docs/agent-run-context-assets.md` 和 Warehouse 的 [仓库架构V2.md](./仓库架构V2.md) 为准。
+
+## 0. 结论摘要
+
+本文的目标不是立即把 Warehouse 重新定义成一个完整的 AI 平台，而是帮助判断：
+
+> Warehouse 是否应该从“WebDAV/S3 兼容的文件与对象存储工具”，逐步转向“面向智能体的上下文资产仓库”。
+
+当前决策：
+
+1. **不要继续沿网盘方向扩张。**
+   网盘方向会把产品拖入同步客户端、相册、在线编辑、企业协作、移动端、复杂分享等成熟红海能力，差异化弱，工程负担重。
+2. **也不要马上押注完整 AI memory / vector database / agent platform。**
+   这些方向已经有强势相邻产品，而且容易过早抽象，导致 Warehouse 失去已有 WebDAV/S3、权限、分享、上传、资产空间等工程积累。
+3. **Agent Run、Context Manifest、Service Principal、Artifact Provenance 放在 Knowledge。**
+   Warehouse 不直接实现这些上层控制面，避免把存储底座和 agent 业务语义混在一起。
+4. **Warehouse 的短期目标是成为 Knowledge 和第三方 AI 服务可靠依赖的数据源与资产回写层。**
+   重点是原始资产、服务资产、manifest 投影、artifact 文件、checksum、权限、协议接入和复制可靠性。
+
+一句话定位建议：
+
+> Warehouse 是面向 AI 应用和智能体的资产存储底座，为 Knowledge 提供可授权、可校验、可共享、可协议兼容的原始资产与产物存储。
+
+英文短定位：
+
+> Storage substrate for agentic work.
+
+## 1. 为什么现在需要做定位判断
+
+Warehouse 目前已经具备多个重要基础能力：
+
+- Web 页面文件管理。
+- WebDAV 接入。
+- S3 兼容接入。
+- WebDAV / S3 独立凭证。
+- 个人资产、应用资产、服务资产三类空间。
+- UCAN app scope。
+- 分组分享、全员分享、定向分享。
+- 浏览器断点上传、checksum、上传任务持久化。
+- active / standby 复制链路设计与实现基础。
+
+这些能力可以支撑两个完全不同的产品方向：
+
+1. **网盘 / 私有云盘方向。**
+   继续补文件预览、在线编辑、同步客户端、照片管理、团队协作、移动端等。
+2. **AI 原生存储方向。**
+   围绕 agent、AI app、service、run、context、artifact、memory、provenance 组织产品能力。
+
+如果不尽早明确方向，后续每个功能都会陷入摇摆：
+
+- 上传任务是在服务“网盘大文件上传体验”，还是服务“agent artifact ingestion”？
+- `services/` 是普通目录，还是 service / agent principal 的工作区？
+- 分组分享是人类协作能力，还是 agent/team 的 capability delegation？
+- S3/WebDAV 是产品主心智，还是兼容层？
+- 是否要做文件版本？是网盘版本，还是 run snapshot / context manifest？
+
+因此，当前最需要的是一个可执行、可验证、不会推翻现有工程的定位决策。
+
+## 2. 核心概念区分
+
+### 2.1 网盘
+
+网盘的核心对象是“人管理的文件”。
+
+典型能力包括：
+
+- 多端同步。
+- 文件预览。
+- 在线编辑。
+- 外链分享。
+- 团队空间。
+- 回收站。
+- 文件版本。
+- 移动端照片备份。
+
+网盘的成功标准是：
+
+- 人类用户上传、查找、同步、分享文件是否方便。
+- 多设备一致性是否好。
+- UI 是否接近成熟网盘体验。
+
+### 2.2 对象存储 / AI 数据基础设施
+
+对象存储和 AI 数据基础设施的核心对象是“blob / object / dataset”。
+
+典型能力包括：
+
+- S3 API。
+- 大对象上传。
+- multipart。
+- bucket / prefix 权限。
+- 高吞吐。
+- 数据湖 / 训练数据集。
+- lifecycle。
+- object metadata。
+
+这一类产品更关注吞吐、成本、规模、协议兼容和数据湖生态。
+
+### 2.3 Agent memory
+
+Agent memory 的核心对象是“智能体需要长期保留和检索的状态、事实、偏好、经验、计划、上下文”。
+
+典型能力包括：
+
+- 短期记忆。
+- 长期记忆。
+- episodic memory。
+- semantic memory。
+- working memory。
+- memory consolidation。
+- retrieval。
+- context injection。
+
+相关研究已经明确指出，智能体需要跨会话维护记忆与状态。MemGPT 把 LLM 上下文窗口视为类似操作系统内存，并通过虚拟上下文管理把信息在主上下文与外部存储之间调度；Generative Agents 通过 memory stream、reflection、planning 支撑可信的长期行为；Mem0 和 Zep 等系统继续把 agent memory 推向独立基础设施方向。
+
+### 2.4 Agent-native storage
+
+Agent-native storage 不是单纯对象存储，也不是单纯 memory 系统。
+
+它的核心对象是：
+
+- workspace
+- run
+- context bundle
+- artifact
+- dataset
+- memory file
+- tool output
+- service-generated asset
+- provenance graph
+- capability-scoped asset
+
+它需要同时具备：
+
+- 文件 / 对象存储能力。
+- 权限与身份模型。
+- 上下文组织能力。
+- 可追溯和可复现能力。
+- 与 agent runtime 的接口。
+- 与传统工具的协议兼容。
+
+Warehouse 更适合切入这一层，而不是直接做“网盘”或“向量数据库”。
+
+## 3. 文献与行业依据
+
+### 3.1 Agent 需要长期记忆和外部状态
+
+Generative Agents 提出了 memory stream、reflection 和 planning，说明可信 agent 行为不能只依赖单轮 prompt，而需要长期记录和组织经验 [1]。
+
+MemGPT 把 LLM 的上下文窗口类比为有限内存，提出 virtual context management，通过函数调用在主上下文和外部存储之间移动信息 [2]。这支持一个关键判断：
+
+> agent 的“存储”不只是存文件，而是管理哪些信息应该进入上下文、哪些信息应该长期保留、哪些信息应该按需检索。
+
+Mem0 进一步把 memory 作为 AI agents 的独立记忆层，并强调跨会话个性化、低延迟检索和长期一致性 [3]。
+
+Zep 的 Graphiti / temporal knowledge graph 路线也表明，agent memory 越来越从简单向量检索走向“时间感知、关系感知、可更新”的记忆结构 [4]。
+
+这些研究共同说明：如果 Warehouse 想面向智能体，不能只提供“文件 CRUD”，还需要面向上下文、记忆、任务产物和历史状态设计上层模型。
+
+### 3.2 RAG 证明“外部知识存储 + 检索”是 LLM 应用基础结构
+
+Retrieval-Augmented Generation (RAG) 通过把参数化模型和非参数化检索记忆结合，证明外部知识存储对生成质量、事实性和可更新性有重要意义 [5]。
+
+这对 Warehouse 的启发是：
+
+- 存储系统不只是被动保存文件。
+- 存储中的文档、产物、日志、manifest 可以成为 agent 的可检索上下文。
+- 未来的 semantic layer 可以建立在已有路径、权限、metadata 和文件 hash 之上。
+
+但 RAG 不是 Warehouse 的第一步。Warehouse 不应马上变成向量数据库，而应先把“可授权、可追溯、可复现的上下文资产”做好，再决定哪些目录需要索引和检索。
+
+### 3.3 文件系统型 agent memory 正在出现
+
+AutoMem 提出让 agent 自主管理文件系统中的长期记忆，FS-Researcher 则把知识库和研究过程组织在模拟文件系统中，用目录、文件和操作历史来支撑长期研究任务 [13][14]。这类工作说明，文件系统对于 agent 仍然有价值，因为它具备：
+
+- 透明可读。
+- 可被人审查。
+- 可被工具操作。
+- 可版本化。
+- 可迁移。
+- 容易和既有开发者工作流结合。
+
+这对 Warehouse 非常重要：Warehouse 已经有 WebDAV/S3 和资产空间，天然适合作为“agent 文件系统 + 上下文资产层”的底座。
+
+### 3.4 可复现性和数据版本是 AI 工程的关键要求
+
+机器学习与数据密集型系统长期强调数据版本、实验追踪、元数据和可复现性。MLflow 的 model registry、experiment tracking 和 artifact tracking 说明，AI 工程需要记录模型、参数、产物和运行上下文 [6]。
+
+FAIR Principles 强调数据应当 Findable、Accessible、Interoperable、Reusable [7]。虽然 FAIR 起源于科学数据管理，但对 agent workspace 也有启发：
+
+- Findable：agent 产物和上下文应有稳定标识、metadata、索引。
+- Accessible：访问需要明确授权和协议。
+- Interoperable：WebDAV/S3/MCP/API 应能互通。
+- Reusable：上下文 manifest 和 artifact provenance 应支持复用和复现。
+
+因此，Warehouse 做 AI native storage，应该优先考虑 manifest、metadata、hash、provenance，而不是先做复杂 UI。
+
+### 3.5 Agent 工具协议正在标准化
+
+Model Context Protocol (MCP) 把外部数据和工具暴露给 LLM 应用，目标是形成统一连接方式 [8]。MCP 的资源、工具、prompt 概念说明 agent 接入外部系统的方式正在从“HTTP API 拼接”走向“标准工具上下文协议”。
+
+这对 Warehouse 的启发是：
+
+- WebDAV/S3 仍然重要，但它们是传统工具入口。
+- 对 agent 来说，未来更自然的入口可能是 MCP / Agent API。
+- Warehouse 可以把目录、manifest、artifact、run、search 暴露成 agent tools/resources。
+
+## 4. 相邻产品与市场地图
+
+当前市面上有很多相邻产品，但没有完全等同于“agent-native storage”的成熟品类。
+
+### 4.1 AI 对象存储 / 数据基础设施
+
+代表：
+
+- MinIO AIStor。
+- Tigris。
+- Cloudflare R2 + AI 生态。
+- AWS S3 + Bedrock / SageMaker 生态。
+
+特点：
+
+- 强 S3 兼容。
+- 强对象存储。
+- 面向 AI/ML 数据集、训练、推理、日志、模型产物。
+- 偏底层基础设施。
+
+不足：
+
+- 不解决 agent run workspace。
+- 不解决上下文 manifest。
+- 不解决人/agent/service 混合身份下的产品化资产协作。
+- 不直接提供 agent memory / provenance / capability-first 工作流。
+
+Warehouse 不适合和这类产品拼规模、吞吐和成本；更适合在其上层或旁侧提供 agent workspace 语义。
+
+### 4.2 Agent memory 产品
+
+代表：
+
+- Mem0。
+- Zep。
+- Letta memory。
+- LangGraph / LangChain memory 生态。
+
+特点：
+
+- 关注 agent 记忆。
+- 支持会话长期化。
+- 支持语义检索。
+- 支持用户偏好、事实、历史行为。
+
+不足：
+
+- 不一定是完整文件/对象存储。
+- 不一定支持 WebDAV/S3。
+- 不一定提供普通用户资产空间、共享、目录权限、浏览器上传。
+- 对 large artifacts / service-generated files / external clients 的支持通常不是核心。
+
+Warehouse 不应复制它们的 memory API，而应提供“memory 可以落地和治理的资产底座”。
+
+### 4.3 向量数据库 / 多模态数据库
+
+代表：
+
+- Chroma。
+- LanceDB。
+- Qdrant。
+- Milvus。
+- Weaviate。
+
+特点：
+
+- embedding 存储。
+- 语义检索。
+- 多模态索引。
+- RAG 生态。
+
+不足：
+
+- 它们不是文件资产系统。
+- 不负责 WebDAV/S3 客户端。
+- 不负责用户/agent/service 的资产生命周期。
+- 不直接管理原始上下文 bundle、run output、权限分享。
+
+Warehouse 未来可以接入向量库，或为选定 workspace 提供 embedding 索引，但不应把自己定位成向量数据库。
+
+### 4.4 网盘 / 企业文档协作
+
+代表：
+
+- Google Drive。
+- Dropbox。
+- OneDrive。
+- Nextcloud。
+- 飞书云文档 / 企业网盘。
+
+特点：
+
+- 人类协作体验成熟。
+- 预览、编辑、分享、同步、移动端能力完整。
+- UI 期望高。
+
+不足：
+
+- 面向智能体的身份、权限、上下文 manifest、run provenance 不是核心。
+- 智能体通常只是作为“另一个应用”接入，而不是一等主体。
+
+Warehouse 如果沿这个方向走，会面临成熟产品的功能预期和差异化不足。
+
+### 4.5 Agent runtime / agent platform
+
+代表：
+
+- Letta。
+- OpenAI Agents SDK。
+- LangGraph。
+- CrewAI。
+- AutoGen。
+
+特点：
+
+- 关注 agent 编排、工具调用、状态、memory、workflow。
+- 更靠近 runtime。
+
+不足：
+
+- 不一定提供完整资产存储、协议兼容、文件治理。
+- artifact 管理通常是附属能力。
+
+Warehouse 可以成为这些 runtime 的存储后端或工具服务，而不是直接和它们竞争。
+
+## 5. Warehouse 当前能力与 AI native 方向的匹配度
+
+### 5.1 已有优势
+
+Warehouse 已经具备几个对 agent-native storage 很有价值的基础：
+
+1. **资产空间分层。**
+   `/personal`、`/apps`、`/services` 已经把个人数据、应用数据、服务产物区分开，这是 agent/service 工作区的前置条件。
+2. **多协议接入。**
+   WebDAV 和 S3 让传统客户端、自动化脚本、SDK、CLI 都能接入，不需要一开始就发明新协议。
+3. **能力授权基础。**
+   WebDAV 密钥、S3 凭证、UCAN app scope、分组分享，都可以演进成 capability-first 的授权体系。
+4. **共享能力。**
+   分组共享、全员共享、定向分享可以扩展到 agent/team/service 协作。
+5. **浏览器上传能力。**
+   断点续传、checksum、加密目录上传，这些能力对大上下文和 agent artifact ingestion 很重要。
+6. **文档体系完整。**
+   当前已有部署、S3、认证、资产空间、共享、容灾等文档，为产品定位演进提供了可审计基础。
+
+### 5.2 当前短板
+
+如果要成为 AI native storage，Warehouse 还缺：
+
+1. **agent/service principal。**
+   当前服务资产仍属于用户目录，缺少真正的服务身份、agent 身份、独立审计和授权。
+2. **workspace/run 一等模型。**
+   当前目录只是目录，还没有 run、context、artifact、manifest、lineage 等概念。
+3. **artifact metadata。**
+   文件缺少创建来源、任务 id、agent id、输入/输出关系、hash、用途、状态。
+4. **context manifest。**
+   不能稳定描述“一次 agent 任务到底使用了哪些输入上下文”。
+5. **agent API / MCP。**
+   当前 WebDAV/S3 对传统工具友好，但对 agent 工具调用还不够直接。
+6. **搜索与语义层。**
+   当前文件可以存，但不能按语义、任务、来源、关联关系检索。
+7. **审计和可观测。**
+   对“哪个 agent 何时访问了什么、生成了什么、派生了什么”还没有结构化记录。
+
+## 6. 三种战略路径比较
+
+### 6.1 路径 A：继续做网盘
+
+定位：
+
+> Warehouse 是一个支持 WebDAV/S3 的个人和团队文件管理系统。
+
+优点：
+
+- 用户容易理解。
+- 需求明确。
+- 现有 Web UI、分享、上传能力可以继续扩展。
+
+缺点：
+
+- 差异化弱。
+- 功能预期无限扩张。
+- 很容易被同步、预览、移动端、协作、在线编辑拖住。
+- 与“为智能体而生”的愿景不匹配。
+
+适用条件：
+
+- 目标用户主要是人类文件管理。
+- 不追求独立 AI 基础设施定位。
+- 愿意长期补网盘体验细节。
+
+本文不推荐作为主路线。
+
+### 6.2 路径 B：做 AI 对象存储 / 数据湖
+
+定位：
+
+> Warehouse 是面向 AI workload 的 S3-compatible object storage。
+
+优点：
+
+- 和 S3 能力、services 资产空间匹配。
+- 对后台服务和 AI 数据管道友好。
+- 可连接 AWS CLI、rclone、SDK。
+
+缺点：
+
+- 会进入 MinIO、Tigris、S3/R2 等强基础设施赛道。
+- 对规模、性能、可靠性要求极高。
+- 很难在短期形成产品差异。
+
+适用条件：
+
+- 团队想做底层存储基础设施。
+- 有明确高吞吐、大规模对象存储需求。
+- 有资源长期打磨分布式存储性能。
+
+本文不建议作为主路线，但建议保留 S3 作为重要接入层。
+
+### 6.3 路径 C：Agent Workspace / Context Asset Store
+
+定位：
+
+> Warehouse 是面向智能体和 AI 应用的上下文资产仓库。
+
+优点：
+
+- 利用现有 WebDAV/S3、资产空间、凭证、分享、上传能力。
+- 避开传统网盘红海。
+- 避开底层对象存储规模竞争。
+- 和 agent memory、RAG、MCP、AI workflow 趋势一致。
+- 可以先从小闭环验证，不需要大重构。
+
+缺点：
+
+- 市场心智还不成熟，需要定义品类。
+- 用户需求需要通过真实 agent 集成验证。
+- 需要补 agent/service 身份、manifest、metadata、provenance。
+
+适用条件：
+
+- 目标用户包括 AI 应用开发者、agent 开发者、后台服务集成者。
+- 希望 Warehouse 成为 AI native 产品，而不是网盘。
+- 愿意用 4-6 周做定位验证。
+
+本文在当时推荐这一路径；当前执行边界已经更新为 Knowledge 与 Warehouse 分工，详见下文和 V2。
+
+## 7. 历史阶段性假设
+
+当时假设：
+
+> Warehouse 底层继续保持 WebDAV/S3 兼容；产品上层验证 Agent Workspace。这个假设后来被拆分为：Knowledge 承接 Agent Run/Context Manifest/Service Principal/Artifact Provenance，Warehouse 承接底层资产存储与协议接入。
+
+这段保留为历史推导，用于说明当时为什么选择“小闭环验证”而不是大重构；具体执行边界以 V2 为准。
+
+原则：
+
+1. 不破坏当前文件、分享、WebDAV/S3 主链路。
+2. 不马上做复杂 vector search。
+3. 不马上做完整文件版本。
+4. 不把 UI 做成网盘形态。
+5. 所有新增模型都要能解释 agent 如何使用。
+
+## 8. 历史验证版本设计
+
+### 8.1 目标
+
+这部分记录早期对 Agent Workspace 的验证设想。当前执行时，Agent Run 和 Context Manifest 由 Knowledge 承接，Warehouse 只提供资产存储、协议接入、checksum、权限和反馈资产回写。
+
+需要回答：
+
+- 一个 agent run 的输入上下文能否被稳定记录？
+- 一个 agent run 的产物能否被追溯？
+- 后台服务是否可以不用用户密码/普通密钥，而用 service/agent 身份写入？
+- 人类用户是否能审查 agent 读写过的资产？
+- 第三方 agent 是否能用简单 API 接入？
+
+### 8.2 最小能力一：Service / Agent Principal
+
+新增概念：
+
+- `principal_type=user|service|agent`
+- `principal_id`
+- `owner_user_id`
+- `display_name`
+- `scope`
+- `created_by`
+- `revoked_at`
+
+短期可先从 `service principal` 开始，不急着区分复杂 agent 类型。
+
+能力：
+
+- 用户可以为某个项目创建 service/agent identity。
+- 该 identity 被授权到 `/services/<project>` 或 `/apps/<appId>`。
+- 生成独立 token / access key。
+- 所有写入记录 principal。
+
+不做：
+
+- 不做组织级复杂 RBAC。
+- 不做多租户 IAM。
+- 不做任意 bucket 管理。
+
+### 8.3 最小能力二：Run Workspace
+
+约定目录结构：
+
+```text
+/services/<project>/runs/<run-id>/
+  manifest.json
+  input/
+  context/
+  artifacts/
+  logs/
+  tmp/
+```
+
+字段示例：
+
+```json
+{
+  "schema": "warehouse.run.v1",
+  "runId": "run_20260731_001",
+  "project": "research-agent",
+  "createdAt": "2026-07-31T12:00:00Z",
+  "createdBy": {
+    "type": "agent",
+    "id": "agent_research_001"
+  },
+  "inputs": [
+    {
+      "path": "/personal/research/source.pdf",
+      "sha256": "...",
+      "role": "source"
+    }
+  ],
+  "context": [
+    {
+      "path": "context/notes.md",
+      "sha256": "...",
+      "role": "summary"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "artifacts/report.md",
+      "sha256": "...",
+      "type": "markdown",
+      "status": "final"
+    }
+  ]
+}
+```
+
+关键点：
+
+- run workspace 本质上仍是文件目录，WebDAV/S3 可见。
+- `manifest.json` 是 AI native 语义入口。
+- 不需要一开始建复杂数据库模型，可以先从约定和服务端校验开始。
+
+### 8.4 最小能力三：Context Manifest
+
+Context Manifest 描述“一次任务使用了哪些上下文资产”。
+
+它至少包含：
+
+- path
+- sha256
+- size
+- contentType
+- role
+- source
+- createdAt
+- generatedBy
+- permissionSnapshot
+
+用途：
+
+- 复现一次 run。
+- 审查 agent 使用了哪些文件。
+- 让 agent 后续按 manifest 读取，而不是随便扫目录。
+- 为未来 indexing / embedding / graph 打基础。
+
+### 8.5 最小能力四：Agent API / MCP 雏形
+
+短期可以先做 HTTP API：
+
+- `POST /api/v1/public/agent/runs`
+- `GET /api/v1/public/agent/runs/{id}`
+- `POST /api/v1/public/agent/runs/{id}/manifest`
+- `POST /api/v1/public/agent/runs/{id}/artifacts`
+- `GET /api/v1/public/agent/runs/{id}/context`
+
+中期再暴露 MCP：
+
+- resource：workspace、run、manifest、artifact。
+- tool：create_run、add_context、write_artifact、read_manifest、search_workspace。
+
+## 9. 不建议当前立即做的能力
+
+### 9.1 完整文件版本
+
+原因：
+
+- 会影响 WebDAV 覆盖语义。
+- 会影响 S3 ETag / Multipart。
+- 会影响配额。
+- 会影响回收站。
+- 会影响分享引用。
+- 会影响 active/standby 复制。
+
+替代：
+
+- 先做 run snapshot / context manifest。
+- 只记录 agent run 使用的输入 hash 和产物 hash。
+
+### 9.2 向量数据库
+
+原因：
+
+- 会过早进入 RAG infra 竞争。
+- 当前还没证明哪些资产需要索引。
+- 权限过滤、增量索引、删除同步、加密目录等问题会增加复杂度。
+
+替代：
+
+- 先把 manifest、metadata、hash、artifact type 做好。
+- 后续只对选定 workspace 做可选索引。
+
+### 9.3 完整 agent memory
+
+原因：
+
+- memory schema 还不明确。
+- Mem0、Zep、Letta 等已有专业方向。
+- Warehouse 更适合提供资产和上下文底座。
+
+替代：
+
+- 支持 memory files。
+- 支持 context manifests。
+- 支持 agent 将 memory 存在 workspace 中。
+
+### 9.4 继续补网盘 UI
+
+不建议优先做：
+
+- 相册。
+- 在线编辑。
+- 多端同步客户端。
+- 富预览套件。
+- 复杂团队空间。
+
+除非这些能力能直接服务 agent workspace，否则先不做。
+
+## 10. 决策矩阵
+
+| 维度 | 网盘路线 | AI 对象存储路线 | Agent Workspace 路线 |
+| --- | --- | --- | --- |
+| 与现有能力匹配 | 中 | 高 | 高 |
+| 差异化 | 低 | 中 | 高 |
+| 工程投入 | 高 | 高 | 中 |
+| 市场成熟度 | 高 | 中 | 低 |
+| 品类定义难度 | 低 | 中 | 高 |
+| 与 AI native 愿景匹配 | 低 | 中 | 高 |
+| 近期可验证性 | 中 | 中 | 高 |
+| 失败后回退成本 | 中 | 高 | 低 |
+
+结论：
+
+- 网盘路线确定性高，但差异化最低。
+- AI 对象存储路线底层价值高，但竞争强、工程重。
+- Agent Workspace 路线不确定性更高，但可以小步验证，且最符合愿景。
+
+## 11. 历史成功标准与失败标准
+
+### 11.1 4-6 周成功标准
+
+以下标准用于保留当时的产品验证判断，不作为当前 Warehouse V2 的验收清单：
+
+1. 至少一个真实 agent / service 集成 Warehouse run workspace。
+2. 能通过 manifest 复现一次 agent run 的输入上下文。
+3. 能回答“这个 artifact 由哪个 agent、基于哪些文件生成”。
+4. service/agent principal 不再依赖普通用户密钥写入。
+5. 人类用户能在 Web UI 中审查 agent 生成的产物和来源。
+6. WebDAV/S3 客户端仍能正常访问这些 workspace。
+7. 有一个外部或半外部开发者认为这个能力比普通 S3/WebDAV 更清晰。
+
+### 11.2 失败标准
+
+出现以下情况，应暂停 AI native 方向：
+
+1. agent workspace 只是目录规范，没有带来实际接入效率提升。
+2. manifest 无人使用，或者 agent 仍然只需要普通 S3。
+3. service/agent principal 复杂度明显高于收益。
+4. 用户仍主要把 Warehouse 当网盘使用。
+5. 新增能力破坏了 WebDAV/S3/分享/上传稳定性。
+
+### 11.3 中止后的回退策略
+
+如果验证失败：
+
+- 保留 `/services` 作为服务资产目录。
+- 保留文档中的 workspace 规范作为推荐实践。
+- 不继续做 MCP / semantic layer。
+- 产品定位回到“开发者友好的 WebDAV/S3 存储与分享系统”。
+
+这个回退成本较低，因为验证阶段不要求大规模数据库重构。
+
+## 12. 历史路线建议
+
+### 12.1 短期保持
+
+继续保持：
+
+- WebDAV 兼容。
+- S3 兼容。
+- 个人 / 应用 / 服务资产空间。
+- UCAN app scope。
+- WebDAV/S3 凭证。
+- 分组分享。
+- 浏览器上传可靠性。
+
+这些是 agent workspace 的基础接入能力，不是包袱。
+
+### 12.2 当时建议新增
+
+当时建议优先新增，当前已调整为 Knowledge 与 Warehouse 分工实现：
+
+1. service/agent principal 设计文档。
+2. run workspace 目录规范。
+3. context manifest schema。
+4. artifact metadata schema。
+5. 最小 HTTP API。
+6. Web UI 中的“服务资产 / runs / artifacts”可读展示。
+
+### 12.3 中期新增
+
+在验证通过后新增：
+
+1. MCP resources/tools。
+2. workspace search。
+3. optional embedding index。
+4. provenance graph。
+5. run diff / run clone。
+6. context bundle export/import。
+
+### 12.4 长期可能方向
+
+长期可以考虑：
+
+- agent team workspace。
+- policy-based context access。
+- confidential / encrypted agent workspace。
+- signed manifest。
+- artifact promotion pipeline。
+- model / dataset / prompt / tool-output 统一 registry。
+
+## 13. 产品叙事建议
+
+### 13.1 不建议的表达
+
+不建议说：
+
+- Warehouse 是网盘。
+- Warehouse 是对象存储。
+- Warehouse 是向量数据库。
+- Warehouse 是 agent memory。
+- Warehouse 是另一个 Dropbox。
+
+这些表达都会把用户带到错误预期。
+
+### 13.2 推荐表达
+
+中文：
+
+> Warehouse 是为智能体而生的上下文资产仓库。
+
+英文：
+
+> Warehouse is an agent-native storage workspace for context, artifacts, and reproducible AI work.
+
+更务实的开发者表达：
+
+> Warehouse gives agents and AI services a permissioned workspace to store inputs, context, logs, and artifacts, while staying compatible with WebDAV and S3.
+
+### 13.3 对 WebDAV/S3 的表达
+
+不要把 WebDAV/S3 放在主定位里。
+
+建议表达：
+
+> WebDAV and S3 are compatibility layers, not the product thesis.
+
+中文：
+
+> WebDAV 和 S3 是兼容入口，不是 Warehouse 的最终产品心智。
+
+## 14. 风险与缓解
+
+### 14.1 品类不清晰
+
+风险：
+
+- 用户不知道 agent-native storage 是什么。
+
+缓解：
+
+- 不先讲概念，先讲 run workspace、manifest、artifact trace。
+- 用具体案例说明：一次研究 agent 任务如何保存输入、上下文、产物、日志。
+
+### 14.2 过早抽象
+
+风险：
+
+- 设计过多 schema 和 API，但没有真实 agent 使用。
+
+缓解：
+
+- 4-6 周只服务一个真实集成场景。
+- 每个字段必须由真实需求驱动。
+
+### 14.3 与现有功能冲突
+
+风险：
+
+- 新模型影响 WebDAV/S3 兼容。
+
+缓解：
+
+- workspace 首先是普通目录。
+- manifest 是增强层，不改变基础文件读写语义。
+
+### 14.4 安全边界复杂化
+
+风险：
+
+- agent/service principal 引入后权限模型变复杂。
+
+缓解：
+
+- 短期只允许 owner 用户创建和管理。
+- principal 只能绑定到 `/services/<project>` 或 `/apps/<appId>`。
+- 所有 token 可撤销、可审计。
+
+### 14.5 用户仍按网盘理解
+
+风险：
+
+- UI 导航、文案和功能继续强化网盘心智。
+
+缓解：
+
+- 服务资产页优先展示 projects / runs / artifacts，而不是普通文件列表。
+- 帮助文档把“文件管理”放在兼容使用章节，把“agent workspace”放在产品主章节。
+
+## 15. 已收敛到 V2 的执行边界
+
+本文前半部分保留了“Agent Workspace 路线”的推导过程，但当前执行边界已经更新：
+
+- Knowledge 负责 Agent Run、Context Manifest、Service Principal、Artifact Provenance。
+- Warehouse 负责文件/对象、权限、凭证、配额、checksum、WebDAV/S3、复制、服务资产路径和资产回写。
+- Warehouse 为 Knowledge 保存原始资产、manifest 投影、artifact 文件和反馈资产。
+- Warehouse 的 V2 执行项维护在 [仓库架构V2.md](./仓库架构V2.md)，本文不再单独维护开发清单。
+
+### 15.1 Warehouse 侧重点
+
+- 固化 `personal` / `apps` / `services` 三类资产空间。
+- 保持 WebDAV/S3/HTTP API 的稳定接入。
+- 为 Knowledge 回写资产提供稳定路径、checksum、权限和审计口径。
+- 不在 Warehouse 内实现完整 agent run 状态机。
+
+### 15.2 Knowledge 侧重点
+
+- 管理 Agent Run。
+- 管理 Context Manifest。
+- 管理 Service Principal。
+- 管理 Artifact Provenance。
+- 决定哪些 Warehouse 资产需要进入知识处理、索引、回写或反馈闭环。
+
+## 16. 最终建议
+
+Warehouse 现在适合做一次明确但可逆的定位转向：
+
+> 不再把“网盘体验”作为主目标，而是把“服务 AI 应用和智能体的数据源与资产回写层”作为下一阶段验证目标。
+
+这条路径的关键优点是：
+
+- 不浪费现有 WebDAV/S3/分享/上传能力。
+- 避免进入网盘红海。
+- 避免和底层对象存储正面竞争。
+- 与 agent memory、RAG、MCP、AI workflow 的趋势一致。
+- 可以用 4-6 周小步验证，不需要立即大重构。
+
+建议立即进入“Warehouse 支撑 Knowledge 的数据源与反馈资产验证阶段”。Knowledge 负责 agent 上层语义，Warehouse 负责稳定资产存储和协议接入；两者的开发边界以 [仓库架构V2.md](./仓库架构V2.md) 为准。
+
+## 参考资料
+
+[1] Park et al., *Generative Agents: Interactive Simulacra of Human Behavior*, 2023. https://arxiv.org/abs/2304.03442
+
+[2] Packer et al., *MemGPT: Towards LLMs as Operating Systems*, 2023. https://arxiv.org/abs/2310.08560
+
+[3] Mem0, *Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory*, 2025. https://arxiv.org/abs/2504.19413
+
+[4] Zep / Graphiti, *Zep: A Temporal Knowledge Graph Architecture for Agent Memory*, 2025. https://arxiv.org/abs/2501.13956
+
+[5] Lewis et al., *Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks*, 2020. https://arxiv.org/abs/2005.11401
+
+[6] MLflow Documentation, Tracking and Model Registry. https://mlflow.org/docs/latest/
+
+[7] Wilkinson et al., *The FAIR Guiding Principles for scientific data management and stewardship*, Scientific Data, 2016. https://www.nature.com/articles/sdata201618
+
+[8] Anthropic, *Model Context Protocol*. https://www.anthropic.com/research/model-context-protocol
+
+[9] Model Context Protocol Documentation. https://modelcontextprotocol.io/docs/getting-started/intro
+
+[10] MinIO, *AIStor*. https://www.min.io/product/aistor
+
+[11] Letta Documentation, Memory and Agent Runtime Concepts. https://docs.letta.com/
+
+[12] Tigris Documentation. https://www.tigrisdata.com/docs/
+
+[13] Wu et al., *AutoMem: Automated Learning of Memory as a Cognitive Skill*, 2026. https://arxiv.org/abs/2607.01224
+
+[14] Zhu et al., *FS-Researcher: Test-Time Scaling for Long-Horizon Research Tasks with File-System-Based Agents*, 2026. https://arxiv.org/abs/2602.01566

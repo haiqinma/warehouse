@@ -194,6 +194,8 @@ export interface AdminUserItem {
   permissions: string[]
   quota: number
   used_space: number
+  quota_status: 'unlimited' | 'over_quota' | 'near_limit' | 'ok'
+  quota_usage_percent?: number
   created_at?: string
   updated_at?: string
   has_password: boolean
