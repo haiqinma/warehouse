@@ -108,6 +108,78 @@ func TestCheckQuotaAllowsCopyOverwriteWhenOnlyDeltaFits(t *testing.T) {
 	}
 }
 
+func TestCheckQuotaRejectsDirectoryCopyWhenTargetHasUnrelatedLargeFile(t *testing.T) {
+	t.Parallel()
+
+	svc, u := newQuotaTestService(t, 100, 95)
+
+	userDir := svc.getUserDirectory(u)
+	sourceFile := filepath.Join(userDir, "personal", "source", "new.txt")
+	targetExisting := filepath.Join(userDir, "personal", "target", "unrelated.bin")
+	if err := os.MkdirAll(filepath.Dir(sourceFile), 0o755); err != nil {
+		t.Fatalf("mkdir source dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(targetExisting), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	if err := os.WriteFile(sourceFile, []byte("1234567890"), 0o644); err != nil {
+		t.Fatalf("seed source file: %v", err)
+	}
+	if err := os.WriteFile(targetExisting, []byte("12345678901234567890"), 0o644); err != nil {
+		t.Fatalf("seed target existing file: %v", err)
+	}
+
+	req := httptest.NewRequest("COPY", "/dav/personal/source", nil)
+	req.Header.Set("Destination", "/dav/personal/target")
+
+	err := svc.checkQuota(context.Background(), u, req)
+	if err == nil {
+		t.Fatal("expected quota error for directory copy delta, got nil")
+	}
+	if err != user.ErrQuotaExceeded {
+		t.Fatalf("expected ErrQuotaExceeded, got %v", err)
+	}
+}
+
+func TestWebDAVServeHTTPDirectoryCopyUpdatesUsedSpaceByRelativeDelta(t *testing.T) {
+	t.Parallel()
+
+	svc, u := newQuotaTestService(t, 200, 50)
+
+	userDir := svc.getUserDirectory(u)
+	sourceFile := filepath.Join(userDir, "personal", "source", "new.txt")
+	targetExisting := filepath.Join(userDir, "personal", "target", "unrelated.bin")
+	if err := os.MkdirAll(filepath.Dir(sourceFile), 0o755); err != nil {
+		t.Fatalf("mkdir source dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(targetExisting), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	if err := os.WriteFile(sourceFile, []byte("1234567890"), 0o644); err != nil {
+		t.Fatalf("seed source file: %v", err)
+	}
+	if err := os.WriteFile(targetExisting, []byte("12345678901234567890"), 0o644); err != nil {
+		t.Fatalf("seed target existing file: %v", err)
+	}
+
+	req := httptest.NewRequest("COPY", "/dav/personal/source", nil)
+	req.Header.Set("Destination", "/dav/personal/target")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserContextKey, u))
+	resp := httptest.NewRecorder()
+
+	svc.ServeHTTP(resp, req)
+
+	if resp.Code < 200 || resp.Code >= 300 {
+		t.Fatalf("expected directory COPY to succeed, got status=%d body=%q", resp.Code, resp.Body.String())
+	}
+	if u.UsedSpace != 60 {
+		t.Fatalf("expected used space to become 60, got %d", u.UsedSpace)
+	}
+	if _, err := os.Stat(filepath.Join(userDir, "personal", "target", "new.txt")); err != nil {
+		t.Fatalf("expected copied file to exist: %v", err)
+	}
+}
+
 func TestWebDAVServeHTTPOverwriteUpdatesUsedSpaceByDelta(t *testing.T) {
 	t.Parallel()
 

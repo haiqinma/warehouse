@@ -10,7 +10,6 @@
 - 认证方式、UCAN、访问密钥、管理员能力：见 [认证设计.md](./认证设计.md)
 - 回收站对外 API、分享接口：见 [Warehouse OpenAPI](./openapi/README.md)
 
-
 ## 处理链路总览
 
 ```mermaid
@@ -56,12 +55,13 @@ sequenceDiagram
 5. **配额校验**：
    - 对 `PUT/POST` 新建文件按完整大小检查
    - 对 `PUT/POST` 覆盖已有文件按大小增量检查
-   - 对 `COPY` 按源路径与目标已存在路径的大小增量检查
+   - 对文件 `COPY` 按源文件与目标已有文件的大小增量检查
+   - 对目录 `COPY` 按源目录相对文件逐个抵扣目标同路径文件大小
    - `MKCOL` 不增加逻辑容量，因此不产生额外 quota 压力
 6. **WebDAV 处理**：
    - 使用自定义 `UnicodeFileSystem`，确保 Unicode 路径正确处理
    - 使用内存锁 `webdav.NewMemLS()`
-7. **删除行为**：`DELETE` 默认移动到回收站目录 `.recycle` 并记录数据库。
+7. **删除行为**：`DELETE` 默认移动到回收站目录 `.recycle` 并记录数据库；apps 下 `backup.__sync_*` 系统运行态对象直接硬删除。
 8. **用量更新**：对主写路径成功操作按 delta 更新 `used_space`；回收站永久删除 / 清空回收站时释放对应额度。
 
 ## WebDAV 方法与权限映射
@@ -102,6 +102,7 @@ sequenceDiagram
 - 若移动失败，会回退为直接删除。
 - 回收站文件命名规则：`{hash}_{原文件名}`。
 - 删除到回收站后，定向分享、公开链接和派生公开链接立即失效；恢复资源不会自动恢复分享。
+- apps 下 `backup.__sync_mutex_v1.__sync_lock_v1`、`backup.__sync_txn_head_v1*.json` 和 `backup.__sync_txn_data_v1.*.json` 属于系统同步运行态对象，删除时不进入回收站；历史误入 `.recycle` 的记录使用 `warehouse recycle clean-sync-artifacts` 清理。
 
 ## MOVE/COPY 目的路径规范化
 

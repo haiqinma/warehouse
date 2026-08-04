@@ -61,6 +61,7 @@ type Container struct {
 	AssignmentAllocator    *service.ReplicationAssignmentAllocator
 	ReplicationWorker      *service.ReplicationWorker
 	ReconcileScanner       *service.ReconcileScanner
+	ReplicationCleaner     *service.ReplicationLifecycleCleaner
 	WebDAVService          *service.WebDAVService
 	RecycleService         *service.RecycleService
 	ShareService           *service.ShareService
@@ -86,6 +87,7 @@ type Container struct {
 	Web3Handler                *handler.Web3Handler
 	EmailAuthHandler           *handler.EmailAuthHandler
 	AssetsHandler              *handler.AssetsHandler
+	AssetObjectHandler         *handler.AssetObjectHandler
 	WebDAVHandler              *handler.WebDAVHandler
 	QuotaHandler               *handler.QuotaHandler
 	UserHandler                *handler.UserHandler
@@ -297,6 +299,15 @@ func (c *Container) initServices() error {
 	c.AssetSpaceManager = assetspace.NewManager(c.Config, c.Logger)
 	c.ObjectService = service.NewObjectService(c.Config.WebDAV.Directory)
 	c.ObjectService.SetMetadataRepository(s3ObjectMetadataRepoAdapter{repo: c.S3ObjectMetadataRepo})
+	// 配额服务
+	c.QuotaService = quota.NewService(c.UserRepository)
+	c.QuotaReconciler = service.NewQuotaReconciler(
+		c.Config,
+		c.UserRepository,
+		c.RecycleRepository,
+		c.QuotaService,
+		c.Logger,
+	)
 	c.PeerResolver = service.NewReplicationPeerResolver(c.Config, c.ClusterNodeRepo, c.ClusterAssignmentRepo)
 	c.NodeHeartbeat = service.NewNodeHeartbeatRegistrar(c.Config, c.ClusterNodeRepo, c.Logger)
 	c.AssignmentAllocator = service.NewReplicationAssignmentAllocator(c.Config, c.ClusterNodeRepo, c.ClusterAssignmentRepo, c.Logger)
@@ -312,16 +323,7 @@ func (c *Container) initServices() error {
 		return fmt.Errorf("failed to create reconcile scanner: %w", err)
 	}
 	c.ReconcileScanner = reconcileScanner
-
-	// 配额服务
-	c.QuotaService = quota.NewService(c.UserRepository)
-	c.QuotaReconciler = service.NewQuotaReconciler(
-		c.Config,
-		c.UserRepository,
-		c.RecycleRepository,
-		c.QuotaService,
-		c.Logger,
-	)
+	c.ReplicationCleaner = service.NewReplicationLifecycleCleaner(c.Config, c.ReconcileRepo, c.Logger)
 
 	// WebDAV 服务
 	fileSystem := webdav.Dir(c.Config.WebDAV.Directory)
@@ -508,6 +510,7 @@ func (c *Container) initHandlers() error {
 	)
 
 	c.AssetsHandler = handler.NewAssetsHandler(c.AssetSpaceManager, c.Logger)
+	c.AssetObjectHandler = handler.NewAssetObjectHandler(c.Config, c.ObjectService, c.Logger)
 
 	// WebDAV 处理器
 	c.WebDAVHandler = handler.NewWebDAVHandler(
@@ -574,6 +577,7 @@ func (c *Container) initHTTP() error {
 		c.Web3Handler,
 		c.EmailAuthHandler,
 		c.AssetsHandler,
+		c.AssetObjectHandler,
 		c.WebDAVHandler,
 		c.QuotaHandler,
 		c.UserHandler,

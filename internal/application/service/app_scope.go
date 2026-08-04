@@ -79,6 +79,11 @@ func enforceAppScope(ctx context.Context, cfg *config.Config, rawPath string, re
 	return nil
 }
 
+// EnforceAppScope validates a user-visible asset path against UCAN app scope.
+func EnforceAppScope(ctx context.Context, cfg *config.Config, rawPath string, requiredActions ...string) error {
+	return enforceAppScope(ctx, cfg, rawPath, requiredActions...)
+}
+
 func (s appScopeInfo) allowsAny(rawPath string, requiredActions ...string) bool {
 	if !s.active {
 		return true

@@ -112,7 +112,14 @@ func (r *QuotaReconciler) ReconcileOnce(ctx context.Context) error {
 		return err
 	}
 
-	var repaired int
+	totalUsers := countQuotaReconcileUsers(users)
+	batchSize := r.config.Quota.AutoReconcileBatchSize
+	if batchSize <= 0 {
+		batchSize = 100
+	}
+	batchPause := r.config.Quota.AutoReconcileBatchPause
+
+	var checked, failed, repaired int
 	for _, u := range users {
 		select {
 		case <-ctx.Done():
@@ -122,8 +129,10 @@ func (r *QuotaReconciler) ReconcileOnce(ctx context.Context) error {
 		if u == nil {
 			continue
 		}
+		checked++
 		changed, err := r.reconcileUser(ctx, u)
 		if err != nil {
+			failed++
 			if r.logger != nil {
 				r.logger.Warn("quota reconcile user failed",
 					zap.String("username", u.Username),
@@ -141,6 +150,11 @@ func (r *QuotaReconciler) ReconcileOnce(ctx context.Context) error {
 					zap.Error(err))
 			}
 		}
+		if checked < totalUsers && checked%batchSize == 0 {
+			if err := sleepQuotaReconcileBatch(ctx, batchPause); err != nil {
+				return err
+			}
+		}
 	}
 
 	if r.notificationSvc != nil {
@@ -152,10 +166,38 @@ func (r *QuotaReconciler) ReconcileOnce(ctx context.Context) error {
 	if r.logger != nil {
 		r.logger.Info("quota reconcile pass finished",
 			zap.Int("user_count", len(users)),
-			zap.Int("repaired_count", repaired))
+			zap.Int("checked_count", checked),
+			zap.Int("repaired_count", repaired),
+			zap.Int("failed_count", failed),
+			zap.Int("batch_size", batchSize),
+			zap.Duration("batch_pause", batchPause))
 	}
 
 	return nil
+}
+
+func countQuotaReconcileUsers(users []*user.User) int {
+	var count int
+	for _, u := range users {
+		if u != nil {
+			count++
+		}
+	}
+	return count
+}
+
+func sleepQuotaReconcileBatch(ctx context.Context, pause time.Duration) error {
+	if pause <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(pause)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (r *QuotaReconciler) reconcileUser(ctx context.Context, u *user.User) (bool, error) {

@@ -45,6 +45,12 @@ func (s *ReconcileScanner) Scan(ctx context.Context) ([]*replication.ReconcileIt
 		if rel == "." {
 			return nil
 		}
+		if shouldSkipReconcilePath(rel, d.IsDir()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 
 		item := &replication.ReconcileItem{
 			Path:  "/" + strings.TrimPrefix(rel, "/"),
@@ -69,4 +75,33 @@ func (s *ReconcileScanner) Scan(ctx context.Context) ([]*replication.ReconcileIt
 	}
 
 	return items, nil
+}
+
+func shouldSkipReconcilePath(rel string, isDir bool) bool {
+	cleaned := filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))
+	if cleaned == "." || cleaned == "" {
+		return false
+	}
+	parts := strings.Split(strings.Trim(cleaned, "/"), "/")
+	if len(parts) == 0 {
+		return false
+	}
+	base := parts[len(parts)-1]
+
+	switch parts[0] {
+	case ".recycle", ".warehouse-uploads", ".s3-multipart":
+		return true
+	}
+	if strings.HasPrefix(base, "._upload-") ||
+		strings.HasPrefix(base, ".warehouse-repl-") ||
+		strings.HasPrefix(base, ".warehouse-copy-") ||
+		strings.HasSuffix(base, ".tmp") ||
+		strings.HasSuffix(base, ".tmp.reconcile") {
+		return true
+	}
+
+	if isDir && base == ".s3-multipart" {
+		return true
+	}
+	return isEphemeralSyncArtifactPath("/" + strings.TrimPrefix(cleaned, "/"))
 }

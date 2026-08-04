@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 )
 
 type fakeHandlerAssignmentRepository struct {
+	mu                 sync.Mutex
 	standbyAssignments map[string]*cluster.ReplicationAssignment
 	pairAssignments    map[string]*cluster.ReplicationAssignment
 	updateCalls        []*cluster.ReplicationAssignment
@@ -33,6 +35,9 @@ func (r *fakeHandlerAssignmentRepository) ListEffectiveByActive(context.Context,
 }
 
 func (r *fakeHandlerAssignmentRepository) GetEffectiveByStandby(_ context.Context, standbyNodeID string) (*cluster.ReplicationAssignment, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	assignment := r.standbyAssignments[standbyNodeID]
 	if assignment == nil {
 		return nil, nil
@@ -42,6 +47,9 @@ func (r *fakeHandlerAssignmentRepository) GetEffectiveByStandby(_ context.Contex
 }
 
 func (r *fakeHandlerAssignmentRepository) GetByPair(_ context.Context, activeNodeID, standbyNodeID string) (*cluster.ReplicationAssignment, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	assignment := r.pairAssignments[activeNodeID+"->"+standbyNodeID]
 	if assignment == nil {
 		return nil, nil
@@ -55,6 +63,9 @@ func (r *fakeHandlerAssignmentRepository) UpsertLease(context.Context, *cluster.
 }
 
 func (r *fakeHandlerAssignmentRepository) UpdateState(_ context.Context, assignment *cluster.ReplicationAssignment) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if assignment == nil {
 		return nil
 	}

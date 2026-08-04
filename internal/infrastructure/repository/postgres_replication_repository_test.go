@@ -75,6 +75,42 @@ func TestPostgresReplicationOutboxRepositoryAppend(t *testing.T) {
 	}
 }
 
+func TestPostgresReplicationReconcileRepositoryCleanupHistory(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	repo := NewPostgresReplicationReconcileRepository(db)
+	itemCutoff := time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)
+	jobCutoff := time.Date(2026, 7, 4, 0, 0, 0, 0, time.UTC)
+	outboxCutoff := itemCutoff
+
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM replication_reconcile_items").
+		WithArgs(replication.ReconcileJobStatusRunning, itemCutoff).
+		WillReturnResult(sqlmock.NewResult(0, 30))
+	mock.ExpectExec("DELETE FROM replication_reconcile_jobs").
+		WithArgs(replication.ReconcileJobStatusRunning, jobCutoff).
+		WillReturnResult(sqlmock.NewResult(0, 4))
+	mock.ExpectExec("DELETE FROM replication_outbox").
+		WithArgs(outboxCutoff).
+		WillReturnResult(sqlmock.NewResult(0, 12))
+	mock.ExpectCommit()
+
+	result, err := repo.CleanupHistory(context.Background(), itemCutoff, jobCutoff, outboxCutoff)
+	if err != nil {
+		t.Fatalf("CleanupHistory: %v", err)
+	}
+	if result.DeletedReconcileItems != 30 || result.DeletedReconcileJobs != 4 || result.DeletedOutboxEvents != 12 {
+		t.Fatalf("unexpected cleanup result: %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestPostgresReplicationOutboxRepositoryAppendBatch(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

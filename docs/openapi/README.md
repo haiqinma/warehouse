@@ -16,6 +16,7 @@
 - 健康检查
 - 钱包挑战/签名、密码登录、令牌刷新和退出
 - 资产空间
+- 资产对象 metadata、download、write 和 list
 - 当前用户和配额
 - WebDAV 访问密钥
 - S3 凭证
@@ -30,7 +31,7 @@
 - 定向分享目录的列表、下载、上传、建目录、重命名和删除
 - 可恢复分片上传会话
 
-当前 Router 中的对外 JSON、SSE、文件流和分片上传 API 已全部建模。`/api/v1/public/share/` 和 `/api/v1/public/uploads/sessions/` 在 Go Router 中是动态前缀，OpenAPI 已使用具体的 token、filename、sessionId 和 partNumber 路径表达。
+当前 Router 中的对外 JSON、SSE、文件流、资产对象和分片上传 API 已全部建模。`/api/v1/public/share/` 和 `/api/v1/public/uploads/sessions/` 在 Go Router 中是动态前缀，OpenAPI 已使用具体的 token、filename、sessionId 和 partNumber 路径表达。
 
 `/api/v1/public/webdav/address/*` 历史别名已从 Router 移除，调用方必须使用 OpenAPI 中的 `/api/v1/public/webdav/group/*` 路径。
 

@@ -39,16 +39,25 @@ replication:
   dispatch_interval: 2s
   request_timeout: 30s
   batch_size: 32
+  reconcile_max_concurrency: 1
+  reconcile_bandwidth_limit_bytes_per_second: 0 # 0 表示不限速；多 standby 补历史时可按 active 出口带宽设置
   retry_backoff_base: 2s   # outbox 重试与 assignment error 自动恢复都会复用这组退避参数
   max_retry_backoff: 5m
   reconcile_auto_pause_failures: 3  # 连续 reconcile 失败达到阈值后自动切到 paused；设为 0 表示关闭自动暂停
+  lifecycle_cleanup_enabled: true
+  lifecycle_cleanup_interval: 24h  # 只在 active 节点运行，启动时先执行一轮
+  outbox_retention: 168h           # 只清理已不属于当前 assignment generation 的历史事件
+  reconcile_item_retention: 168h   # 终态 reconcile item 明细保留 7 天
+  reconcile_job_retention: 720h    # job 摘要保留 30 天，且不得短于 item 保留期
 
 # Quota Configuration
 quota:
-  auto_reconcile_enabled: true # 是否开启后台自动额度对账；默认打开
-  auto_reconcile_interval: 6h  # 自动对账周期；只在非 standby 节点运行，启动时也会先执行一轮
-                               # 对账口径 = 用户目录实际文件大小 + recycle_items 中该用户回收站记录大小
-                               # 建议：单机或小规模先用 6h；用户量较大时再按负载调大
+  auto_reconcile_enabled: true  # 是否开启后台自动额度对账；默认打开
+  auto_reconcile_interval: 6h   # 自动对账周期；只在非 standby 节点运行，启动时也会先执行一轮
+  auto_reconcile_batch_size: 100 # 每批扫描用户数；用于控制单轮对账资源占用
+  auto_reconcile_batch_pause: 0s # 批间暂停；0 表示不额外暂停
+                                # 对账口径 = 用户目录实际文件大小 + recycle_items 中该用户回收站记录大小
+                                # 建议：单机或小规模先用 6h；用户量较大时再按负载调大
 
 # S3-compatible endpoint
 # `s3.enabled` is the YAML default. If WAREHOUSE_S3_ENABLED is set, the

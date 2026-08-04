@@ -655,12 +655,9 @@ const quotaAlertState = computed(() => {
 })
 const adminUsersSummary = computed(() => {
   const items = adminUsers.value
-  const limitedUsers = items.filter(item => item.quota > 0)
-  const overQuotaUsers = limitedUsers.filter(item => item.used_space > item.quota)
-  const nearLimitUsers = limitedUsers.filter(item => {
-    if (item.quota <= 0) return false
-    return item.used_space <= item.quota && item.used_space / item.quota >= 0.8
-  })
+  const limitedUsers = items.filter(item => adminUserQuotaStatusValue(item) !== 'unlimited')
+  const overQuotaUsers = items.filter(item => adminUserQuotaStatusValue(item) === 'over_quota')
+  const nearLimitUsers = items.filter(item => adminUserQuotaStatusValue(item) === 'near_limit')
   return {
     total: items.length,
     limited: limitedUsers.length,
@@ -688,11 +685,10 @@ const filteredAdminUsers = computed(() => {
   const filter = adminUsersFilter.value
   const items = [...adminUsers.value]
   const filtered = items.filter(item => {
-    if (filter === 'unlimited') return item.quota === 0
-    if (filter === 'near_limit') {
-      return item.quota > 0 && item.used_space <= item.quota && item.used_space / item.quota >= 0.8
-    }
-    if (filter === 'over_quota') return item.quota > 0 && item.used_space > item.quota
+    const status = adminUserQuotaStatusValue(item)
+    if (filter === 'unlimited') return status === 'unlimited'
+    if (filter === 'near_limit') return status === 'near_limit'
+    if (filter === 'over_quota') return status === 'over_quota'
     return true
   })
   filtered.sort((a, b) => {
@@ -2101,6 +2097,9 @@ function selectAccessKeyDirectoryPickerPath() {
 
 function adminUserUsageRate(item: AdminUserItem): number | null {
   if (!item || item.quota <= 0) return null
+  if (typeof item.quota_usage_percent === 'number') {
+    return item.quota_usage_percent / 100
+  }
   return item.used_space / item.quota
 }
 
@@ -2111,17 +2110,25 @@ function formatAdminUserUsage(item: AdminUserItem): string {
 }
 
 function adminUserQuotaStatus(item: AdminUserItem): { label: string; type: 'info' | 'warning' | 'danger' | 'success' } {
+  switch (adminUserQuotaStatusValue(item)) {
+    case 'unlimited':
+      return { label: '不限额', type: 'info' }
+    case 'over_quota':
+      return { label: '已超额', type: 'danger' }
+    case 'near_limit':
+      return { label: '接近上限', type: 'warning' }
+    default:
+      return { label: '正常', type: 'success' }
+  }
+}
+
+function adminUserQuotaStatusValue(item: AdminUserItem): 'unlimited' | 'over_quota' | 'near_limit' | 'ok' {
+  if (item?.quota_status) return item.quota_status
   const rate = adminUserUsageRate(item)
-  if (rate === null) {
-    return { label: '不限额', type: 'info' }
-  }
-  if (item.used_space > item.quota) {
-    return { label: '已超额', type: 'danger' }
-  }
-  if (rate >= 0.8) {
-    return { label: '接近上限', type: 'warning' }
-  }
-  return { label: '正常', type: 'success' }
+  if (rate === null) return 'unlimited'
+  if (item.used_space > item.quota) return 'over_quota'
+  if (rate >= 0.8) return 'near_limit'
+  return 'ok'
 }
 
 function quotaUnitMultiplier(unit: 'B' | 'KB' | 'MB' | 'GB' | 'TB'): number {

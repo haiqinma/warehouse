@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -65,12 +66,16 @@ func (r fakeReplicationOffsetReader) Upsert(_ context.Context, _ *replication.Of
 }
 
 type fakeReconcileStore struct {
+	mu        sync.Mutex
 	latestJob *replication.ReconcileJob
 	items     []*replication.ReconcileItem
 	jobs      []*replication.ReconcileJob
 }
 
 func (s *fakeReconcileStore) CreateJob(_ context.Context, job *replication.ReconcileJob) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	job.ID = int64(len(s.jobs) + 1)
 	now := time.Now()
 	job.CreatedAt = now
@@ -93,23 +98,40 @@ func (s *fakeReconcileStore) CreateJob(_ context.Context, job *replication.Recon
 }
 
 func (s *fakeReconcileStore) ReplaceItems(_ context.Context, _ int64, items []*replication.ReconcileItem) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.items = append([]*replication.ReconcileItem(nil), items...)
 	return nil
 }
 
 func (s *fakeReconcileStore) UpdateJobResult(_ context.Context, jobID int64, status string, scannedItems, pendingItems int64, completedAt *time.Time, lastError *string) error {
-	if s.latestJob == nil || s.latestJob.ID != jobID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var target *replication.ReconcileJob
+	for _, job := range s.jobs {
+		if job != nil && job.ID == jobID {
+			target = job
+			break
+		}
+	}
+	if target == nil {
 		return replication.ErrReconcileJobNotFound
 	}
-	s.latestJob.Status = status
-	s.latestJob.ScannedItems = scannedItems
-	s.latestJob.PendingItems = pendingItems
-	s.latestJob.CompletedAt = completedAt
-	s.latestJob.LastError = lastError
+	target.Status = status
+	target.ScannedItems = scannedItems
+	target.PendingItems = pendingItems
+	target.CompletedAt = completedAt
+	target.LastError = lastError
+	s.latestJob = target
 	return nil
 }
 
 func (s *fakeReconcileStore) GetLatestJob(_ context.Context, sourceNodeID, targetNodeID string) (*replication.ReconcileJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.latestJob == nil {
 		return nil, replication.ErrReconcileJobNotFound
 	}
@@ -120,6 +142,9 @@ func (s *fakeReconcileStore) GetLatestJob(_ context.Context, sourceNodeID, targe
 }
 
 func (s *fakeReconcileStore) GetLatestUnfinishedJob(_ context.Context, sourceNodeID, targetNodeID string, assignmentGeneration *int64) (*replication.ReconcileJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	for i := len(s.jobs) - 1; i >= 0; i-- {
 		job := s.jobs[i]
 		if job == nil {
@@ -140,6 +165,9 @@ func (s *fakeReconcileStore) GetLatestUnfinishedJob(_ context.Context, sourceNod
 }
 
 func (s *fakeReconcileStore) ListPendingItems(_ context.Context, _ int64, limit int) ([]*replication.ReconcileItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if len(s.items) == 0 {
 		return nil, nil
 	}
@@ -159,6 +187,9 @@ func (s *fakeReconcileStore) ListPendingItems(_ context.Context, _ int64, limit 
 }
 
 func (s *fakeReconcileStore) UpdateItemsState(_ context.Context, itemIDs []int64, state string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if len(itemIDs) == 0 {
 		return nil
 	}
@@ -175,6 +206,9 @@ func (s *fakeReconcileStore) UpdateItemsState(_ context.Context, itemIDs []int64
 }
 
 func (s *fakeReconcileStore) CountPendingItems(_ context.Context, _ int64) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	var count int64
 	for _, item := range s.items {
 		if item.State == "" || item.State == replication.ReconcileItemStatePending {
@@ -201,6 +235,43 @@ func (s fakeReconcileScanner) Scan(_ context.Context) ([]*replication.ReconcileI
 		return nil, s.err
 	}
 	return append([]*replication.ReconcileItem(nil), s.items...), nil
+}
+
+type observedReconcileScanner struct {
+	delay     time.Duration
+	mu        sync.Mutex
+	active    int
+	maxActive int
+}
+
+func (s *observedReconcileScanner) Scan(ctx context.Context) ([]*replication.ReconcileItem, error) {
+	s.mu.Lock()
+	s.active++
+	if s.active > s.maxActive {
+		s.maxActive = s.active
+	}
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.active--
+		s.mu.Unlock()
+	}()
+
+	timer := time.NewTimer(s.delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+		return nil, nil
+	}
+}
+
+func (s *observedReconcileScanner) MaxActive() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.maxActive
 }
 
 func (r fakeHandlerPeerResolver) ResolveTarget(context.Context) (*service.ResolvedReplicationPeer, error) {
@@ -278,6 +349,11 @@ func TestInternalReplicationHandleStatusActive(t *testing.T) {
 	nextRetryAt := time.Now().Add(30 * time.Second)
 	lastError := "peer returned 500"
 	generation := int64(60)
+	assignmentLastJobID := int64(77)
+	assignmentFailureCount := 2
+	assignmentNextRetryAt := time.Now().Add(45 * time.Second)
+	assignmentLastError := "scan failed"
+	assignmentLeaseUntil := time.Now().Add(time.Minute)
 	handler := NewInternalReplicationHandler(
 		cfg,
 		zap.NewNop(),
@@ -316,6 +392,21 @@ func TestInternalReplicationHandleStatusActive(t *testing.T) {
 				AssignmentGeneration: &generation,
 				Healthy:              true,
 				LastHeartbeatAt:      timePointer(time.Now()),
+			},
+		},
+		&fakeHandlerAssignmentRepository{
+			pairAssignments: map[string]*cluster.ReplicationAssignment{
+				"node-a->node-b": {
+					ActiveNodeID:       "node-a",
+					StandbyNodeID:      "node-b",
+					State:              cluster.AssignmentStateReconciling,
+					Generation:         generation,
+					LeaseExpiresAt:     &assignmentLeaseUntil,
+					LastReconcileJobID: &assignmentLastJobID,
+					LastError:          &assignmentLastError,
+					FailureCount:       assignmentFailureCount,
+					NextRetryAt:        &assignmentNextRetryAt,
+				},
 			},
 		},
 	)
@@ -372,8 +463,32 @@ func TestInternalReplicationHandleStatusActive(t *testing.T) {
 	if resp.Replication.LastError == nil || *resp.Replication.LastError != lastError {
 		t.Fatalf("unexpected last error: %#v", resp.Replication.LastError)
 	}
+	if resp.Replication.AssignmentState != cluster.AssignmentStateReconciling {
+		t.Fatalf("unexpected assignment state: %#v", resp.Replication.AssignmentState)
+	}
+	if resp.Replication.AssignmentGeneration == nil || *resp.Replication.AssignmentGeneration != generation {
+		t.Fatalf("unexpected assignment generation: %#v", resp.Replication.AssignmentGeneration)
+	}
+	if resp.Replication.AssignmentLeaseUntil == nil || !resp.Replication.AssignmentLeaseUntil.Equal(assignmentLeaseUntil) {
+		t.Fatalf("unexpected assignment lease: %#v", resp.Replication.AssignmentLeaseUntil)
+	}
+	if resp.Replication.AssignmentLastJobID == nil || *resp.Replication.AssignmentLastJobID != assignmentLastJobID {
+		t.Fatalf("unexpected assignment last job id: %#v", resp.Replication.AssignmentLastJobID)
+	}
+	if resp.Replication.AssignmentFailureCount == nil || *resp.Replication.AssignmentFailureCount != assignmentFailureCount {
+		t.Fatalf("unexpected assignment failure count: %#v", resp.Replication.AssignmentFailureCount)
+	}
+	if resp.Replication.AssignmentNextRetryAt == nil || !resp.Replication.AssignmentNextRetryAt.Equal(assignmentNextRetryAt) {
+		t.Fatalf("unexpected assignment next retry: %#v", resp.Replication.AssignmentNextRetryAt)
+	}
+	if resp.Replication.AssignmentLastError == nil || *resp.Replication.AssignmentLastError != assignmentLastError {
+		t.Fatalf("unexpected assignment last error: %#v", resp.Replication.AssignmentLastError)
+	}
 	if resp.Replication.LagSeconds == nil || *resp.Replication.LagSeconds < 60 {
 		t.Fatalf("expected positive lag seconds, got %#v", resp.Replication.LagSeconds)
+	}
+	if !containsNote(resp.Replication.Notes, "assignment is reconciling") {
+		t.Fatalf("expected reconciling note, got %#v", resp.Replication.Notes)
 	}
 }
 
@@ -1418,6 +1533,79 @@ func TestRunPeriodicReconcileOnceTriggersPendingTarget(t *testing.T) {
 	}
 }
 
+func TestRunPeriodicReconcileOnceHonorsReconcileMaxConcurrency(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Node.ID = "node-a"
+	cfg.Node.Role = "active"
+	cfg.Replication.Enabled = true
+	cfg.Replication.SharedSecret = "shared-secret"
+	cfg.Replication.RequestTimeout = 5 * time.Second
+	cfg.Replication.ReconcileMaxConcurrency = 1
+
+	generation := int64(6)
+	reconcileStore := &fakeReconcileStore{}
+	assignments := &fakeHandlerAssignmentRepository{
+		pairAssignments: map[string]*cluster.ReplicationAssignment{
+			"node-a->node-b": {
+				ActiveNodeID:   "node-a",
+				StandbyNodeID:  "node-b",
+				State:          cluster.AssignmentStatePending,
+				Generation:     generation,
+				LeaseExpiresAt: timePointer(time.Now().UTC().Add(time.Minute)),
+			},
+			"node-a->node-c": {
+				ActiveNodeID:   "node-a",
+				StandbyNodeID:  "node-c",
+				State:          cluster.AssignmentStatePending,
+				Generation:     generation,
+				LeaseExpiresAt: timePointer(time.Now().UTC().Add(time.Minute)),
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/internal/replication/bootstrap/mark":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"success":true,"lastAppliedOutboxId":0}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	scanner := &observedReconcileScanner{delay: 30 * time.Millisecond}
+	handler := NewInternalReplicationHandler(
+		cfg,
+		zap.NewNop(),
+		nil,
+		nil,
+		reconcileStore,
+		scanner,
+		fakeHandlerPeerResolver{
+			targets: []*service.ResolvedReplicationPeer{
+				{NodeID: "node-b", AssignmentGeneration: &generation},
+				{NodeID: "node-c", AssignmentGeneration: &generation},
+			},
+			dispatchTargets: []*service.ResolvedReplicationPeer{
+				{NodeID: "node-b", BaseURL: server.URL, Healthy: true, AssignmentGeneration: &generation},
+				{NodeID: "node-c", BaseURL: server.URL, Healthy: true, AssignmentGeneration: &generation},
+			},
+		},
+		assignments,
+	)
+
+	if err := handler.runPeriodicReconcileOnce(context.Background()); err != nil {
+		t.Fatalf("runPeriodicReconcileOnce: %v", err)
+	}
+	if scanner.MaxActive() != 1 {
+		t.Fatalf("expected reconcile scans to stay serial, got max active %d", scanner.MaxActive())
+	}
+	if len(reconcileStore.jobs) != 2 {
+		t.Fatalf("expected 2 reconcile jobs, got %d", len(reconcileStore.jobs))
+	}
+}
+
 func TestRunPeriodicReconcileOnceSkipsReplicatingTargetWithCurrentBaseline(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Node.ID = "node-a"
@@ -1478,4 +1666,13 @@ func TestRunPeriodicReconcileOnceSkipsReplicatingTargetWithCurrentBaseline(t *te
 	if assignment == nil || assignment.State != cluster.AssignmentStateReplicating {
 		t.Fatalf("expected assignment to remain replicating, got %#v", assignment)
 	}
+}
+
+func containsNote(notes []string, fragment string) bool {
+	for _, note := range notes {
+		if strings.Contains(note, fragment) {
+			return true
+		}
+	}
+	return false
 }

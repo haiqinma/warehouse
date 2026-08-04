@@ -108,3 +108,10 @@ type ReconcileItem struct {
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }
+
+// LifecycleCleanupResult summarizes one replication-history cleanup pass.
+type LifecycleCleanupResult struct {
+	DeletedReconcileItems int64
+	DeletedReconcileJobs  int64
+	DeletedOutboxEvents   int64
+}

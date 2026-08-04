@@ -74,18 +74,20 @@ type adminRuleResponse struct {
 }
 
 type adminUserResponse struct {
-	ID            string              `json:"id"`
-	Username      string              `json:"username"`
-	WalletAddress string              `json:"wallet_address,omitempty"`
-	Email         string              `json:"email,omitempty"`
-	Directory     string              `json:"directory"`
-	Permissions   []string            `json:"permissions"`
-	Quota         int64               `json:"quota"`
-	UsedSpace     int64               `json:"used_space"`
-	Rules         []adminRuleResponse `json:"rules,omitempty"`
-	CreatedAt     string              `json:"created_at,omitempty"`
-	UpdatedAt     string              `json:"updated_at,omitempty"`
-	HasPassword   bool                `json:"has_password"`
+	ID                string              `json:"id"`
+	Username          string              `json:"username"`
+	WalletAddress     string              `json:"wallet_address,omitempty"`
+	Email             string              `json:"email,omitempty"`
+	Directory         string              `json:"directory"`
+	Permissions       []string            `json:"permissions"`
+	Quota             int64               `json:"quota"`
+	UsedSpace         int64               `json:"used_space"`
+	QuotaStatus       string              `json:"quota_status"`
+	QuotaUsagePercent *float64            `json:"quota_usage_percent,omitempty"`
+	Rules             []adminRuleResponse `json:"rules,omitempty"`
+	CreatedAt         string              `json:"created_at,omitempty"`
+	UpdatedAt         string              `json:"updated_at,omitempty"`
+	HasPassword       bool                `json:"has_password"`
 }
 
 // HandleList lists all users.
@@ -440,16 +442,17 @@ func buildAdminRules(items []adminRuleRequest) ([]*user.Rule, error) {
 
 func buildAdminUserResponse(u *user.User) adminUserResponse {
 	resp := adminUserResponse{
-		ID:            u.ID,
-		Username:      u.Username,
-		WalletAddress: u.WalletAddress,
-		Email:         u.Email,
-		Directory:     u.Directory,
-		Permissions:   permissionsToStrings(u.Permissions),
-		Quota:         u.Quota,
-		UsedSpace:     u.UsedSpace,
-		HasPassword:   u.HasPassword(),
+		ID:          u.ID,
+		Username:    u.Username,
+		Email:       u.Email,
+		Directory:   u.Directory,
+		Permissions: permissionsToStrings(u.Permissions),
+		Quota:       u.Quota,
+		UsedSpace:   u.UsedSpace,
+		HasPassword: u.HasPassword(),
 	}
+	resp.WalletAddress = u.WalletAddress
+	resp.QuotaStatus, resp.QuotaUsagePercent = adminQuotaStatus(u)
 
 	if len(u.Rules) > 0 {
 		resp.Rules = make([]adminRuleResponse, 0, len(u.Rules))
@@ -470,6 +473,21 @@ func buildAdminUserResponse(u *user.User) adminUserResponse {
 	}
 
 	return resp
+}
+
+func adminQuotaStatus(u *user.User) (string, *float64) {
+	if u == nil || u.Quota <= 0 {
+		return "unlimited", nil
+	}
+	percent := float64(u.UsedSpace) / float64(u.Quota) * 100
+	switch {
+	case u.UsedSpace > u.Quota:
+		return "over_quota", &percent
+	case percent >= 80:
+		return "near_limit", &percent
+	default:
+		return "ok", &percent
+	}
 }
 
 type adminRuleError struct {

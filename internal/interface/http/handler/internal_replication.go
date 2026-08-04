@@ -59,7 +59,9 @@ type InternalReplicationHandler struct {
 	peerResolver          service.ReplicationPeerResolver
 	assignments           repository.ClusterReplicationAssignmentRepository
 	autoReconcileInterval time.Duration
-	reconcileExecutionMu  sync.Mutex
+	reconcileExecutionSem chan struct{}
+	reconcileBandwidthMu  sync.Mutex
+	reconcileBandwidthAt  time.Time
 }
 
 // NewInternalReplicationHandler creates a new internal replication handler.
@@ -87,6 +89,7 @@ func NewInternalReplicationHandler(
 		peerResolver:          peerResolver,
 		assignments:           assignmentRepo,
 		autoReconcileInterval: defaultPeriodicReconcileInterval,
+		reconcileExecutionSem: make(chan struct{}, reconcileMaxConcurrency(cfg)),
 	}
 }
 
@@ -124,6 +127,13 @@ type internalReplicationStatus struct {
 	LastFailureAttempt     *int       `json:"lastFailureAttempt,omitempty"`
 	NextRetryAt            *time.Time `json:"nextRetryAt,omitempty"`
 	LastError              *string    `json:"lastError,omitempty"`
+	AssignmentState        string     `json:"assignmentState,omitempty"`
+	AssignmentGeneration   *int64     `json:"assignmentGeneration,omitempty"`
+	AssignmentLeaseUntil   *time.Time `json:"assignmentLeaseUntil,omitempty"`
+	AssignmentLastJobID    *int64     `json:"assignmentLastReconcileJobId,omitempty"`
+	AssignmentFailureCount *int       `json:"assignmentFailureCount,omitempty"`
+	AssignmentNextRetryAt  *time.Time `json:"assignmentNextRetryAt,omitempty"`
+	AssignmentLastError    *string    `json:"assignmentLastError,omitempty"`
 	Notes                  []string   `json:"notes,omitempty"`
 }
 
@@ -184,6 +194,26 @@ func (h *InternalReplicationHandler) HandleStatus(w http.ResponseWriter, r *http
 	}
 
 	sourceNodeID, targetNodeID := h.replicationPair(resolvedPeer)
+	if h.assignments != nil && sourceNodeID != "" && targetNodeID != "" {
+		assignment, err := h.assignments.GetByPair(r.Context(), sourceNodeID, targetNodeID)
+		if err != nil {
+			h.logger.Error("failed to load replication assignment",
+				zap.String("source_node_id", sourceNodeID),
+				zap.String("target_node_id", targetNodeID),
+				zap.Error(err))
+			h.writeError(w, http.StatusInternalServerError, "Failed to load replication assignment")
+			return
+		}
+		if assignment != nil {
+			response.Replication.AssignmentState = assignment.State
+			response.Replication.AssignmentGeneration = int64Pointer(assignment.Generation)
+			response.Replication.AssignmentLeaseUntil = assignment.LeaseExpiresAt
+			response.Replication.AssignmentLastJobID = assignment.LastReconcileJobID
+			response.Replication.AssignmentFailureCount = intPointer(assignment.FailureCount)
+			response.Replication.AssignmentNextRetryAt = assignment.NextRetryAt
+			response.Replication.AssignmentLastError = assignment.LastError
+		}
+	}
 	if h.outbox != nil && sourceNodeID != "" && targetNodeID != "" {
 		summary, err := h.outbox.GetStatusSummary(r.Context(), sourceNodeID, targetNodeID, response.Replication.ResolvedGeneration)
 		if err != nil {
@@ -438,8 +468,11 @@ func (h *InternalReplicationHandler) RunAutoReconcile(ctx context.Context) {
 }
 
 func (h *InternalReplicationHandler) startReconcile(ctx context.Context, targetNodeID string) (*internalReconcileStartResponse, error) {
-	h.reconcileExecutionMu.Lock()
-	defer h.reconcileExecutionMu.Unlock()
+	release, err := h.acquireReconcileSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	peer, err := h.resolveTargetPeerForNode(ctx, targetNodeID, false)
 	if err != nil {
@@ -845,6 +878,16 @@ func (h *InternalReplicationHandler) buildNotes(status internalReplicationStatus
 	if status.FailedEvents != nil && *status.FailedEvents > 0 {
 		notes = append(notes, "pendingEvents includes events currently waiting for retry")
 	}
+	switch status.AssignmentState {
+	case cluster.AssignmentStatePending:
+		notes = append(notes, "assignment is pending; automatic reconcile should establish a baseline")
+	case cluster.AssignmentStateReconciling:
+		notes = append(notes, "assignment is reconciling; historical items are being applied before steady replication")
+	case cluster.AssignmentStatePaused:
+		notes = append(notes, "assignment is paused; fix the last error and run resume before automatic reconcile can continue")
+	case cluster.AssignmentStateError:
+		notes = append(notes, "assignment is in error; retry or resume after fixing the last error")
+	}
 
 	return notes
 }
@@ -871,6 +914,10 @@ func (h *InternalReplicationHandler) runPeriodicReconcileOnce(ctx context.Contex
 	}
 
 	var sweepErr error
+	candidates := make([]struct {
+		peer   *service.ResolvedReplicationPeer
+		reason string
+	}, 0, len(peers))
 	for _, peer := range peers {
 		shouldRun, reason, err := h.shouldRunAutomaticReconcileForPeer(ctx, peer)
 		if err != nil {
@@ -880,27 +927,46 @@ func (h *InternalReplicationHandler) runPeriodicReconcileOnce(ctx context.Contex
 		if !shouldRun {
 			continue
 		}
-
-		resp, err := h.startReconcile(ctx, peer.NodeID)
-		if err != nil {
-			sweepErr = errors.Join(sweepErr, fmt.Errorf("auto reconcile target %q: %w", peer.NodeID, err))
-			if h.logger != nil {
-				h.logger.Warn("automatic reconcile attempt failed",
-					zap.String("target_node_id", peer.NodeID),
-					zap.String("reason", reason),
-					zap.Error(err))
-			}
-			continue
-		}
-		if h.logger != nil {
-			h.logger.Info("automatic reconcile finished",
-				zap.String("target_node_id", resp.TargetNodeID),
-				zap.String("reason", reason),
-				zap.Int64("job_id", resp.JobID),
-				zap.Int64("scanned_items", resp.ScannedItems),
-				zap.Int64("pending_items", resp.PendingItems))
-		}
+		candidates = append(candidates, struct {
+			peer   *service.ResolvedReplicationPeer
+			reason string
+		}{peer: peer, reason: reason})
 	}
+	if len(candidates) == 0 {
+		return sweepErr
+	}
+
+	var wg sync.WaitGroup
+	var errMu sync.Mutex
+	for _, candidate := range candidates {
+		candidate := candidate
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := h.startReconcile(ctx, candidate.peer.NodeID)
+			if err != nil {
+				errMu.Lock()
+				sweepErr = errors.Join(sweepErr, fmt.Errorf("auto reconcile target %q: %w", candidate.peer.NodeID, err))
+				errMu.Unlock()
+				if h.logger != nil {
+					h.logger.Warn("automatic reconcile attempt failed",
+						zap.String("target_node_id", candidate.peer.NodeID),
+						zap.String("reason", candidate.reason),
+						zap.Error(err))
+				}
+				return
+			}
+			if h.logger != nil {
+				h.logger.Info("automatic reconcile finished",
+					zap.String("target_node_id", resp.TargetNodeID),
+					zap.String("reason", candidate.reason),
+					zap.Int64("job_id", resp.JobID),
+					zap.Int64("scanned_items", resp.ScannedItems),
+					zap.Int64("pending_items", resp.PendingItems))
+			}
+		}()
+	}
+	wg.Wait()
 	return sweepErr
 }
 
@@ -1005,7 +1071,70 @@ func (h *InternalReplicationHandler) waitStartupReconcileRetry(ctx context.Conte
 	}
 }
 
+func (h *InternalReplicationHandler) acquireReconcileSlot(ctx context.Context) (func(), error) {
+	if h == nil {
+		return func() {}, nil
+	}
+	sem := h.reconcileExecutionSem
+	if sem == nil {
+		sem = make(chan struct{}, 1)
+		h.reconcileExecutionSem = sem
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case sem <- struct{}{}:
+		return func() { <-sem }, nil
+	}
+}
+
+func reconcileMaxConcurrency(cfg *config.Config) int {
+	if cfg == nil || cfg.Replication.ReconcileMaxConcurrency <= 0 {
+		return 1
+	}
+	return cfg.Replication.ReconcileMaxConcurrency
+}
+
+func (h *InternalReplicationHandler) throttleReconcileBytes(ctx context.Context, byteCount int) error {
+	if h == nil || h.config == nil || byteCount <= 0 {
+		return nil
+	}
+	limit := h.config.Replication.ReconcileBandwidthLimitBPS
+	if limit <= 0 {
+		return nil
+	}
+
+	delay := time.Duration(int64(time.Second) * int64(byteCount) / limit)
+	if delay <= 0 {
+		return nil
+	}
+
+	h.reconcileBandwidthMu.Lock()
+	now := time.Now()
+	availableAt := now
+	if h.reconcileBandwidthAt.After(now) {
+		availableAt = h.reconcileBandwidthAt
+	}
+	h.reconcileBandwidthAt = availableAt.Add(delay)
+	wait := h.reconcileBandwidthAt.Sub(now)
+	h.reconcileBandwidthMu.Unlock()
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func boolPointer(value bool) *bool {
+	v := value
+	return &v
+}
+
+func intPointer(value int) *int {
 	v := value
 	return &v
 }

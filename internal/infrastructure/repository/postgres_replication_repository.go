@@ -38,6 +38,12 @@ type ReplicationReconcileRepository interface {
 	ListPendingItems(ctx context.Context, jobID int64, limit int) ([]*replication.ReconcileItem, error)
 	UpdateItemsState(ctx context.Context, itemIDs []int64, state string) error
 	CountPendingItems(ctx context.Context, jobID int64) (int64, error)
+	CleanupHistory(ctx context.Context, itemCutoff, jobCutoff, outboxCutoff time.Time) (*replication.LifecycleCleanupResult, error)
+}
+
+// ReplicationLifecycleRepository removes replication history without touching current generations.
+type ReplicationLifecycleRepository interface {
+	CleanupHistory(ctx context.Context, itemCutoff, jobCutoff, outboxCutoff time.Time) (*replication.LifecycleCleanupResult, error)
 }
 
 // PostgresReplicationOutboxRepository is the PostgreSQL implementation.
@@ -53,6 +59,84 @@ type PostgresReplicationOffsetRepository struct {
 // PostgresReplicationReconcileRepository is the PostgreSQL implementation.
 type PostgresReplicationReconcileRepository struct {
 	db *sql.DB
+}
+
+// CleanupHistory removes expired reconcile detail and obsolete-generation outbox events atomically.
+func (r *PostgresReplicationReconcileRepository) CleanupHistory(ctx context.Context, itemCutoff, jobCutoff, outboxCutoff time.Time) (*replication.LifecycleCleanupResult, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin replication lifecycle cleanup transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	result := &replication.LifecycleCleanupResult{}
+	itemResult, err := tx.ExecContext(ctx, `
+		DELETE FROM replication_reconcile_items AS item
+		USING replication_reconcile_jobs AS job
+		WHERE item.job_id = job.id
+		  AND job.status <> $1
+		  AND job.completed_at IS NOT NULL
+		  AND job.completed_at < $2
+	`, replication.ReconcileJobStatusRunning, itemCutoff)
+	if err != nil {
+		return nil, fmt.Errorf("failed to clean replication reconcile items: %w", err)
+	}
+	result.DeletedReconcileItems, err = itemResult.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to count cleaned replication reconcile items: %w", err)
+	}
+
+	jobResult, err := tx.ExecContext(ctx, `
+		DELETE FROM replication_reconcile_jobs AS job
+		WHERE job.status <> $1
+		  AND job.completed_at IS NOT NULL
+		  AND job.completed_at < $2
+		  AND NOT EXISTS (
+			SELECT 1 FROM cluster_replication_assignments AS assignment
+			WHERE assignment.last_reconcile_job_id = job.id
+		  )
+		  AND job.id <> (
+			SELECT newest.id
+			FROM replication_reconcile_jobs AS newest
+			WHERE newest.source_node_id = job.source_node_id
+			  AND newest.target_node_id = job.target_node_id
+			  AND newest.assignment_generation IS NOT DISTINCT FROM job.assignment_generation
+			ORDER BY newest.id DESC
+			LIMIT 1
+		  )
+	`, replication.ReconcileJobStatusRunning, jobCutoff)
+	if err != nil {
+		return nil, fmt.Errorf("failed to clean replication reconcile jobs: %w", err)
+	}
+	result.DeletedReconcileJobs, err = jobResult.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to count cleaned replication reconcile jobs: %w", err)
+	}
+
+	outboxResult, err := tx.ExecContext(ctx, `
+		DELETE FROM replication_outbox AS outbox
+		WHERE outbox.assignment_generation IS NOT NULL
+		  AND outbox.created_at < $1
+		  AND NOT EXISTS (
+			SELECT 1 FROM cluster_replication_assignments AS assignment
+			WHERE assignment.active_node_id = outbox.source_node_id
+			  AND assignment.standby_node_id = outbox.target_node_id
+			  AND assignment.generation = outbox.assignment_generation
+			  AND assignment.state <> 'released'
+		  )
+	`, outboxCutoff)
+	if err != nil {
+		return nil, fmt.Errorf("failed to clean replication outbox history: %w", err)
+	}
+	result.DeletedOutboxEvents, err = outboxResult.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to count cleaned replication outbox history: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit replication lifecycle cleanup: %w", err)
+	}
+	return result, nil
 }
 
 // NewPostgresReplicationOutboxRepository creates an outbox repository.

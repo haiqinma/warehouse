@@ -132,6 +132,16 @@ func (l *Loader) overrideFromEnv(config *Config) {
 			config.Replication.BatchSize = size
 		}
 	}
+	if v := os.Getenv("WEBDAV_REPLICATION_RECONCILE_MAX_CONCURRENCY"); v != "" {
+		if count, err := strconv.Atoi(v); err == nil {
+			config.Replication.ReconcileMaxConcurrency = count
+		}
+	}
+	if v := os.Getenv("WEBDAV_REPLICATION_RECONCILE_BANDWIDTH_LIMIT_BYTES_PER_SECOND"); v != "" {
+		if limit, err := strconv.ParseInt(v, 10, 64); err == nil {
+			config.Replication.ReconcileBandwidthLimitBPS = limit
+		}
+	}
 	if v := os.Getenv("WEBDAV_REPLICATION_RETRY_BACKOFF_BASE"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			config.Replication.RetryBackoffBase = d
@@ -147,12 +157,45 @@ func (l *Loader) overrideFromEnv(config *Config) {
 			config.Replication.ReconcileAutoPauseFailures = count
 		}
 	}
+	if v := os.Getenv("WEBDAV_REPLICATION_LIFECYCLE_CLEANUP_ENABLED"); v != "" {
+		config.Replication.LifecycleCleanupEnabled = parseEnvBool(v)
+	}
+	if v := os.Getenv("WEBDAV_REPLICATION_LIFECYCLE_CLEANUP_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			config.Replication.LifecycleCleanupInterval = d
+		}
+	}
+	if v := os.Getenv("WEBDAV_REPLICATION_OUTBOX_RETENTION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			config.Replication.OutboxRetention = d
+		}
+	}
+	if v := os.Getenv("WEBDAV_REPLICATION_RECONCILE_ITEM_RETENTION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			config.Replication.ReconcileItemRetention = d
+		}
+	}
+	if v := os.Getenv("WEBDAV_REPLICATION_RECONCILE_JOB_RETENTION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			config.Replication.ReconcileJobRetention = d
+		}
+	}
 	if v := os.Getenv("WEBDAV_QUOTA_AUTO_RECONCILE_ENABLED"); v != "" {
 		config.Quota.AutoReconcileEnabled = parseEnvBool(v)
 	}
 	if v := os.Getenv("WEBDAV_QUOTA_AUTO_RECONCILE_INTERVAL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			config.Quota.AutoReconcileInterval = d
+		}
+	}
+	if v := os.Getenv("WEBDAV_QUOTA_AUTO_RECONCILE_BATCH_SIZE"); v != "" {
+		if size, err := strconv.Atoi(v); err == nil {
+			config.Quota.AutoReconcileBatchSize = size
+		}
+	}
+	if v := os.Getenv("WEBDAV_QUOTA_AUTO_RECONCILE_BATCH_PAUSE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			config.Quota.AutoReconcileBatchPause = d
 		}
 	}
 	if v := os.Getenv("WAREHOUSE_S3_ENABLED"); v != "" {
@@ -343,6 +386,12 @@ func (l *Loader) validateQuota(config *Config) error {
 	if config.Quota.AutoReconcileInterval <= 0 {
 		return errors.New("quota.auto_reconcile_interval must be greater than zero when auto_reconcile_enabled is true")
 	}
+	if config.Quota.AutoReconcileBatchSize <= 0 {
+		return errors.New("quota.auto_reconcile_batch_size must be greater than zero when auto_reconcile_enabled is true")
+	}
+	if config.Quota.AutoReconcileBatchPause < 0 {
+		return errors.New("quota.auto_reconcile_batch_pause must be greater than or equal to zero")
+	}
 	return nil
 }
 
@@ -429,6 +478,12 @@ func (l *Loader) validateReplication(config *Config) error {
 	if replication.BatchSize <= 0 {
 		return errors.New("replication.batch_size must be greater than zero")
 	}
+	if replication.ReconcileMaxConcurrency <= 0 {
+		return errors.New("replication.reconcile_max_concurrency must be greater than zero")
+	}
+	if replication.ReconcileBandwidthLimitBPS < 0 {
+		return errors.New("replication.reconcile_bandwidth_limit_bytes_per_second must be greater than or equal to zero")
+	}
 	if replication.RetryBackoffBase <= 0 {
 		return errors.New("replication.retry_backoff_base must be greater than zero")
 	}
@@ -437,6 +492,20 @@ func (l *Loader) validateReplication(config *Config) error {
 	}
 	if replication.ReconcileAutoPauseFailures < 0 {
 		return errors.New("replication.reconcile_auto_pause_failures must be greater than or equal to zero")
+	}
+	if replication.LifecycleCleanupEnabled {
+		if replication.LifecycleCleanupInterval <= 0 {
+			return errors.New("replication.lifecycle_cleanup_interval must be greater than zero")
+		}
+		if replication.OutboxRetention <= 0 {
+			return errors.New("replication.outbox_retention must be greater than zero")
+		}
+		if replication.ReconcileItemRetention <= 0 {
+			return errors.New("replication.reconcile_item_retention must be greater than zero")
+		}
+		if replication.ReconcileJobRetention < replication.ReconcileItemRetention {
+			return errors.New("replication.reconcile_job_retention must be greater than or equal to reconcile_item_retention")
+		}
 	}
 
 	return nil
