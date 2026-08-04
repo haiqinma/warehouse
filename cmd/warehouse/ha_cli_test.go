@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,25 @@ import (
 	"github.com/yeying-community/warehouse/internal/infrastructure/config"
 	"github.com/yeying-community/warehouse/internal/infrastructure/repository"
 )
+
+func TestValidateHACleanupConfig(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Replication.Enabled = true
+	cfg.Node.Role = "active"
+	if err := validateHACleanupConfig(cfg); err != nil {
+		t.Fatalf("expected active cleanup config to pass: %v", err)
+	}
+
+	cfg.Node.Role = "standby"
+	if err := validateHACleanupConfig(cfg); err == nil || !strings.Contains(err.Error(), "active") {
+		t.Fatalf("expected standby cleanup config rejection, got %v", err)
+	}
+	cfg.Node.Role = "active"
+	cfg.Replication.Enabled = false
+	if err := validateHACleanupConfig(cfg); err == nil || !strings.Contains(err.Error(), "enabled") {
+		t.Fatalf("expected disabled replication cleanup rejection, got %v", err)
+	}
+}
 
 func TestResolveHABaseURLDefaultsToLocalhost(t *testing.T) {
 	cfg := config.DefaultConfig()

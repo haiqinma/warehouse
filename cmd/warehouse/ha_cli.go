@@ -37,11 +37,97 @@ func runHACommand(args []string) error {
 		return runHAReconcile(args[1:])
 	case "bootstrap":
 		return runHABootstrap(args[1:])
+	case "cleanup":
+		return runHACleanup(args[1:])
 	case "-h", "--help", "help":
 		printHAHelp()
 		return nil
 	default:
 		return fmt.Errorf("unsupported ha subcommand %q", args[0])
+	}
+}
+
+func runHACleanup(args []string) error {
+	if len(args) == 0 {
+		printHACleanupHelp()
+		return nil
+	}
+	switch args[0] {
+	case "history":
+		return runHACleanupHistory(args[1:])
+	case "-h", "--help", "help":
+		printHACleanupHelp()
+		return nil
+	default:
+		return fmt.Errorf("unsupported ha cleanup subcommand %q", args[0])
+	}
+}
+
+func runHACleanupHistory(args []string) error {
+	flags := pflag.NewFlagSet("ha-cleanup-history", pflag.ContinueOnError)
+	flags.StringP("config", "c", "", "Config file path")
+	dryRun := flags.Bool("dry-run", false, "Only count history that would be deleted")
+	flags.BoolP("help", "h", false, "Show help")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if help, _ := flags.GetBool("help"); help {
+		fmt.Println("Usage:")
+		fmt.Println("  warehouse ha cleanup history -c config.yaml [--dry-run]")
+		return nil
+	}
+
+	cfg, err := loadHAConfigFromFlags(flags)
+	if err != nil {
+		return err
+	}
+	if err := validateHACleanupConfig(cfg); err != nil {
+		return err
+	}
+	db, err := database.NewPostgresDB(cfg.Database)
+	if err != nil {
+		return fmt.Errorf("connect database: %w", err)
+	}
+	defer db.Close()
+
+	repo := repository.NewPostgresReplicationReconcileRepository(db.DB)
+	cleaner := service.NewReplicationLifecycleCleaner(cfg, repo, nil)
+	var result any
+	if *dryRun {
+		result, err = cleaner.PreviewOnce(context.Background())
+	} else {
+		result, err = cleaner.CleanupOnce(context.Background())
+	}
+	if err != nil {
+		return err
+	}
+	printPrettyJSONFromAny(buildHACleanupHistoryResponse(cfg, *dryRun, result))
+	return nil
+}
+
+func validateHACleanupConfig(cfg *config.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is required")
+	}
+	if !cfg.Replication.Enabled {
+		return fmt.Errorf("replication must be enabled for history cleanup")
+	}
+	if !strings.EqualFold(strings.TrimSpace(cfg.Node.Role), "active") {
+		return fmt.Errorf("history cleanup requires an active node config")
+	}
+	return nil
+}
+
+func buildHACleanupHistoryResponse(cfg *config.Config, dryRun bool, result any) map[string]any {
+	return map[string]any{
+		"command":                    "ha cleanup history",
+		"dryRun":                     dryRun,
+		"nodeId":                     cfg.Node.ID,
+		"outboxRetention":            cfg.Replication.OutboxRetention.String(),
+		"reconcileItemRetention":     cfg.Replication.ReconcileItemRetention.String(),
+		"reconcileJobRetention":      cfg.Replication.ReconcileJobRetention.String(),
+		"cleanupResult":              result,
+		"currentGenerationProtected": true,
 	}
 }
 
@@ -605,6 +691,7 @@ func printHAHelp() {
 	fmt.Println("  warehouse ha reconcile start -c config.yaml [--peer] [--base-url URL] [--target-node-id ID]")
 	fmt.Println("  warehouse ha reconcile status -c config.yaml [--peer] [--base-url URL] [--target-node-id ID]")
 	fmt.Println("  warehouse ha bootstrap mark -c config.yaml [--peer] [--base-url URL] [--target-node-id ID] [--outbox-id N]")
+	fmt.Println("  warehouse ha cleanup history -c config.yaml [--dry-run]")
 }
 
 func peerTargetNodeID(usePeer bool, targetNodeID string) string {
@@ -633,6 +720,11 @@ func printHAReconcileHelp() {
 func printHABootstrapHelp() {
 	fmt.Println("Usage:")
 	fmt.Println("  warehouse ha bootstrap mark -c config.yaml [--peer] [--base-url URL] [--target-node-id ID] [--outbox-id N]")
+}
+
+func printHACleanupHelp() {
+	fmt.Println("Usage:")
+	fmt.Println("  warehouse ha cleanup history -c config.yaml [--dry-run]")
 }
 
 func newHAAssignmentFlags(name string) *pflag.FlagSet {

@@ -73,6 +73,20 @@ func (c *ReplicationLifecycleCleaner) CleanupOnce(ctx context.Context) (*replica
 	)
 }
 
+// PreviewOnce returns the rows that would be removed by CleanupOnce.
+func (c *ReplicationLifecycleCleaner) PreviewOnce(ctx context.Context) (*replication.LifecycleCleanupResult, error) {
+	if c == nil || c.repository == nil || c.config == nil {
+		return &replication.LifecycleCleanupResult{}, nil
+	}
+	now := c.now()
+	return c.repository.PreviewHistoryCleanup(
+		ctx,
+		now.Add(-c.config.Replication.ReconcileItemRetention),
+		now.Add(-c.config.Replication.ReconcileJobRetention),
+		now.Add(-c.config.Replication.OutboxRetention),
+	)
+}
+
 func (c *ReplicationLifecycleCleaner) cleanupAndLog(ctx context.Context) {
 	result, err := c.CleanupOnce(ctx)
 	if err != nil {

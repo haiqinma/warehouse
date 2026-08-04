@@ -239,6 +239,8 @@ cd ..
 ./build/warehouse ha reconcile start -c config.yaml --target-node-id warehouse-standby-1
 ./build/warehouse ha reconcile status -c config.yaml --target-node-id warehouse-standby-1
 ./build/warehouse ha bootstrap mark -c config.yaml --peer --target-node-id warehouse-standby-1 --outbox-id 123
+./build/warehouse ha cleanup history -c config.yaml --dry-run
+./build/warehouse ha cleanup history -c config.yaml
 ```
 
 补充说明：

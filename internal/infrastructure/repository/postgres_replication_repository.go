@@ -38,11 +38,13 @@ type ReplicationReconcileRepository interface {
 	ListPendingItems(ctx context.Context, jobID int64, limit int) ([]*replication.ReconcileItem, error)
 	UpdateItemsState(ctx context.Context, itemIDs []int64, state string) error
 	CountPendingItems(ctx context.Context, jobID int64) (int64, error)
+	PreviewHistoryCleanup(ctx context.Context, itemCutoff, jobCutoff, outboxCutoff time.Time) (*replication.LifecycleCleanupResult, error)
 	CleanupHistory(ctx context.Context, itemCutoff, jobCutoff, outboxCutoff time.Time) (*replication.LifecycleCleanupResult, error)
 }
 
 // ReplicationLifecycleRepository removes replication history without touching current generations.
 type ReplicationLifecycleRepository interface {
+	PreviewHistoryCleanup(ctx context.Context, itemCutoff, jobCutoff, outboxCutoff time.Time) (*replication.LifecycleCleanupResult, error)
 	CleanupHistory(ctx context.Context, itemCutoff, jobCutoff, outboxCutoff time.Time) (*replication.LifecycleCleanupResult, error)
 }
 
@@ -59,6 +61,71 @@ type PostgresReplicationOffsetRepository struct {
 // PostgresReplicationReconcileRepository is the PostgreSQL implementation.
 type PostgresReplicationReconcileRepository struct {
 	db *sql.DB
+}
+
+// PreviewHistoryCleanup counts expired replication history without modifying it.
+func (r *PostgresReplicationReconcileRepository) PreviewHistoryCleanup(ctx context.Context, itemCutoff, jobCutoff, outboxCutoff time.Time) (*replication.LifecycleCleanupResult, error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin replication lifecycle preview transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	result := &replication.LifecycleCleanupResult{}
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM replication_reconcile_items AS item
+		JOIN replication_reconcile_jobs AS job ON job.id = item.job_id
+		WHERE job.status <> $1
+		  AND job.completed_at IS NOT NULL
+		  AND job.completed_at < $2
+	`, replication.ReconcileJobStatusRunning, itemCutoff).Scan(&result.DeletedReconcileItems); err != nil {
+		return nil, fmt.Errorf("failed to preview replication reconcile items cleanup: %w", err)
+	}
+
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM replication_reconcile_jobs AS job
+		WHERE job.status <> $1
+		  AND job.completed_at IS NOT NULL
+		  AND job.completed_at < $2
+		  AND NOT EXISTS (
+			SELECT 1 FROM cluster_replication_assignments AS assignment
+			WHERE assignment.last_reconcile_job_id = job.id
+		  )
+		  AND job.id <> (
+			SELECT newest.id
+			FROM replication_reconcile_jobs AS newest
+			WHERE newest.source_node_id = job.source_node_id
+			  AND newest.target_node_id = job.target_node_id
+			  AND newest.assignment_generation IS NOT DISTINCT FROM job.assignment_generation
+			ORDER BY newest.id DESC
+			LIMIT 1
+		  )
+	`, replication.ReconcileJobStatusRunning, jobCutoff).Scan(&result.DeletedReconcileJobs); err != nil {
+		return nil, fmt.Errorf("failed to preview replication reconcile jobs cleanup: %w", err)
+	}
+
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM replication_outbox AS outbox
+		WHERE outbox.assignment_generation IS NOT NULL
+		  AND outbox.created_at < $1
+		  AND NOT EXISTS (
+			SELECT 1 FROM cluster_replication_assignments AS assignment
+			WHERE assignment.active_node_id = outbox.source_node_id
+			  AND assignment.standby_node_id = outbox.target_node_id
+			  AND assignment.generation = outbox.assignment_generation
+			  AND assignment.state <> 'released'
+		  )
+	`, outboxCutoff).Scan(&result.DeletedOutboxEvents); err != nil {
+		return nil, fmt.Errorf("failed to preview replication outbox cleanup: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit replication lifecycle preview: %w", err)
+	}
+	return result, nil
 }
 
 // CleanupHistory removes expired reconcile detail and obsolete-generation outbox events atomically.
