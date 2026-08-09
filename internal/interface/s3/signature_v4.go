@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ var (
 	ErrUnsupportedPayloadHash   = errors.New("unsupported payload hash")
 	ErrSignatureMismatch        = errors.New("signature mismatch")
 	ErrInvalidCanonicalEncoding = errors.New("invalid canonical encoding")
+	ErrInvalidExpires           = errors.New("invalid presigned URL expiry")
 )
 
 // SignatureV4Config controls validation of header-based AWS Signature Version 4.
@@ -80,6 +82,9 @@ func VerifyHeaderSignature(req *http.Request, secret string, cfg SignatureV4Conf
 	authorization, err := parseAuthorization(req.Header.Get("Authorization"))
 	if err != nil {
 		return nil, err
+	}
+	if !hasSignedHeader(authorization.signedHeaders, "x-amz-date") {
+		return nil, fmt.Errorf("%w: x-amz-date is required", ErrInvalidSignedHeaders)
 	}
 	if authorization.region != cfg.Region ||
 		authorization.service != cfg.Service ||
@@ -161,6 +166,64 @@ func VerifyHeaderSignature(req *http.Request, secret string, cfg SignatureV4Conf
 		Signature:        authorization.signature,
 		SigningKey:       deriveSigningKey(secret, authorization.scopeDate, authorization.region, authorization.service),
 	}, nil
+}
+
+// VerifyPresignedSignature validates an AWS Signature V4 query-string signed
+// request. The S3 SDK uses this form for temporary download URLs.
+func VerifyPresignedSignature(req *http.Request, secret string, cfg SignatureV4Config) (*SignatureV4Result, error) {
+	if req == nil {
+		return nil, fmt.Errorf("%w: request is nil", ErrMalformedAuthorization)
+	}
+	cfg = normalizeSignatureV4Config(cfg)
+	values := req.URL.Query()
+	if values.Get("X-Amz-Algorithm") != signatureV4Algorithm {
+		return nil, ErrUnsupportedAlgorithm
+	}
+	authorization, err := parsePresignedAuthorization(values)
+	if err != nil {
+		return nil, err
+	}
+	if authorization.region != cfg.Region || authorization.service != cfg.Service || authorization.scopeDate == "" {
+		return nil, fmt.Errorf("%w: expected region=%q service=%q, got region=%q service=%q", ErrInvalidCredentialScope, cfg.Region, cfg.Service, authorization.region, authorization.service)
+	}
+	requestTime, err := parseRequestTime(values.Get("X-Amz-Date"))
+	if err != nil {
+		return nil, err
+	}
+	if authorization.scopeDate != requestTime.Format("20060102") {
+		return nil, fmt.Errorf("%w: credential date %q does not match request date %q", ErrInvalidCredentialScope, authorization.scopeDate, requestTime.Format("20060102"))
+	}
+	expires, err := strconv.ParseInt(values.Get("X-Amz-Expires"), 10, 64)
+	if err != nil || expires < 1 || expires > 7*24*60*60 {
+		return nil, ErrInvalidExpires
+	}
+	now := cfg.Now().UTC()
+	if requestTime.Sub(now) > cfg.MaxClockSkew || now.After(requestTime.Add(time.Duration(expires)*time.Second)) {
+		return nil, ErrRequestTimeTooSkewed
+	}
+	payloadHash := values.Get("X-Amz-Content-Sha256")
+	if payloadHash == "" {
+		payloadHash = unsignedPayload
+	}
+	if err := validatePayloadHash(payloadHash, true); err != nil {
+		return nil, err
+	}
+	canonicalRequest, err := buildCanonicalRequestExcludingSignature(req, authorization.signedHeaders, payloadHash)
+	if err != nil {
+		return nil, err
+	}
+	scope := strings.Join([]string{authorization.scopeDate, authorization.region, authorization.service, signatureV4Terminator}, "/")
+	stringToSign := strings.Join([]string{signatureV4Algorithm, requestTime.Format("20060102T150405Z"), scope, sha256Hex([]byte(canonicalRequest))}, "\n")
+	expectedSignature := calculateSignature(secret, authorization.scopeDate, authorization.region, authorization.service, stringToSign)
+	providedSignature, err := hex.DecodeString(authorization.signature)
+	if err != nil || len(providedSignature) != sha256.Size {
+		return nil, fmt.Errorf("%w: signature must be 64 hexadecimal characters", ErrMalformedAuthorization)
+	}
+	expectedBytes, _ := hex.DecodeString(expectedSignature)
+	if subtle.ConstantTimeCompare(providedSignature, expectedBytes) != 1 {
+		return nil, ErrSignatureMismatch
+	}
+	return &SignatureV4Result{AccessKeyID: authorization.accessKeyID, ScopeDate: authorization.scopeDate, Region: authorization.region, Service: authorization.service, SignedHeaders: append([]string(nil), authorization.signedHeaders...), PayloadHash: payloadHash, RequestTime: requestTime, CanonicalRequest: canonicalRequest, StringToSign: stringToSign, Signature: authorization.signature, SigningKey: deriveSigningKey(secret, authorization.scopeDate, authorization.region, authorization.service)}, nil
 }
 
 func deriveSigningKey(secret, date, region, service string) []byte {
@@ -255,6 +318,16 @@ func parseAuthorization(raw string) (*parsedAuthorization, error) {
 	}, nil
 }
 
+func parsePresignedAuthorization(values url.Values) (*parsedAuthorization, error) {
+	credential := values.Get("X-Amz-Credential")
+	signedHeadersRaw := values.Get("X-Amz-SignedHeaders")
+	signature := strings.ToLower(values.Get("X-Amz-Signature"))
+	if credential == "" || signedHeadersRaw == "" || signature == "" {
+		return nil, ErrMissingAuthorization
+	}
+	return parseAuthorization(signatureV4Algorithm + " Credential=" + credential + ", SignedHeaders=" + signedHeadersRaw + ", Signature=" + signature)
+}
+
 func validateSignedHeaders(headers []string) error {
 	if len(headers) == 0 {
 		return ErrInvalidSignedHeaders
@@ -272,9 +345,6 @@ func validateSignedHeaders(headers []string) error {
 	if _, ok := seen["host"]; !ok {
 		return fmt.Errorf("%w: host is required", ErrInvalidSignedHeaders)
 	}
-	if _, ok := seen["x-amz-date"]; !ok {
-		return fmt.Errorf("%w: x-amz-date is required", ErrInvalidSignedHeaders)
-	}
 	sorted := append([]string(nil), headers...)
 	sort.Strings(sorted)
 	for i := range headers {
@@ -283,6 +353,15 @@ func validateSignedHeaders(headers []string) error {
 		}
 	}
 	return nil
+}
+
+func hasSignedHeader(headers []string, target string) bool {
+	for _, header := range headers {
+		if header == target {
+			return true
+		}
+	}
+	return false
 }
 
 func parseRequestTime(raw string) (time.Time, error) {
@@ -323,11 +402,19 @@ func validatePayloadHash(payloadHash string, allowUnsigned bool) error {
 }
 
 func buildCanonicalRequest(req *http.Request, signedHeaders []string, payloadHash string) (string, error) {
+	return buildCanonicalRequestWithQuery(req, signedHeaders, payloadHash, req.URL.RawQuery)
+}
+
+func buildCanonicalRequestExcludingSignature(req *http.Request, signedHeaders []string, payloadHash string) (string, error) {
+	return buildCanonicalRequestWithQuery(req, signedHeaders, payloadHash, removeQueryParameter(req.URL.RawQuery, "X-Amz-Signature"))
+}
+
+func buildCanonicalRequestWithQuery(req *http.Request, signedHeaders []string, payloadHash, rawQuery string) (string, error) {
 	canonicalURI, err := canonicalURI(req)
 	if err != nil {
 		return "", err
 	}
-	canonicalQuery, err := canonicalQuery(req.URL.RawQuery)
+	canonicalQuery, err := canonicalQuery(rawQuery)
 	if err != nil {
 		return "", err
 	}
@@ -343,6 +430,20 @@ func buildCanonicalRequest(req *http.Request, signedHeaders []string, payloadHas
 		strings.Join(signedHeaders, ";"),
 		payloadHash,
 	}, "\n"), nil
+}
+
+func removeQueryParameter(rawQuery, name string) string {
+	items := strings.Split(rawQuery, "&")
+	kept := make([]string, 0, len(items))
+	for _, item := range items {
+		rawKey, _, _ := strings.Cut(item, "=")
+		key, err := percentDecode(rawKey)
+		if err == nil && string(key) == name {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return strings.Join(kept, "&")
 }
 
 func canonicalURI(req *http.Request) (string, error) {

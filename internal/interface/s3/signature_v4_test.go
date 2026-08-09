@@ -3,6 +3,8 @@ package s3
 import (
 	"errors"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +43,43 @@ func TestVerifyHeaderSignatureAcceptsAWSSDKSignedUnicodeRequest(t *testing.T) {
 	}
 	if result.Region != "us-east-1" || result.Service != "s3" {
 		t.Fatalf("unexpected scope: region=%q service=%q", result.Region, result.Service)
+	}
+}
+
+func TestVerifyPresignedSignatureAcceptsAWSSDKStyleRequest(t *testing.T) {
+	req := newPresignedGetRequest(t, testSigningTime, 600)
+
+	result, err := VerifyPresignedSignature(req, testSecretKey, testSignatureConfig())
+	if err != nil {
+		t.Fatalf("verify request: %v", err)
+	}
+	if result.AccessKeyID != testAccessKey {
+		t.Fatalf("unexpected access key: got=%q want=%q", result.AccessKeyID, testAccessKey)
+	}
+	if result.PayloadHash != unsignedPayload {
+		t.Fatalf("unexpected payload hash: %q", result.PayloadHash)
+	}
+}
+
+func TestVerifyPresignedSignatureRejectsTamperedObjectPath(t *testing.T) {
+	req := newPresignedGetRequest(t, testSigningTime, 600)
+	req.URL.Path = "/services/project/other.png"
+	req.URL.RawPath = ""
+
+	_, err := VerifyPresignedSignature(req, testSecretKey, testSignatureConfig())
+	if !errors.Is(err, ErrSignatureMismatch) {
+		t.Fatalf("expected signature mismatch, got %v", err)
+	}
+}
+
+func TestVerifyPresignedSignatureRejectsExpiredURL(t *testing.T) {
+	req := newPresignedGetRequest(t, testSigningTime, 60)
+	cfg := testSignatureConfig()
+	cfg.Now = func() time.Time { return testSigningTime.Add(61 * time.Second) }
+
+	_, err := VerifyPresignedSignature(req, testSecretKey, cfg)
+	if !errors.Is(err, ErrRequestTimeTooSkewed) {
+		t.Fatalf("expected expired request to be rejected, got %v", err)
 	}
 }
 
@@ -174,6 +213,31 @@ func newSignedGetRequest(t *testing.T) *http.Request {
 		"Authorization",
 		"AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20260710/us-east-1/s3/aws4_request, SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date, Signature=afda99f7107ae4de11cb11642d20f814f4ae1fc1b7aaba6415b99aa71228b43d",
 	)
+	return req
+}
+
+func newPresignedGetRequest(t *testing.T, requestTime time.Time, expires int64) *http.Request {
+	t.Helper()
+	query := url.Values{}
+	query.Set("X-Amz-Algorithm", signatureV4Algorithm)
+	query.Set("X-Amz-Credential", testAccessKey+"/"+requestTime.Format("20060102")+"/us-east-1/s3/aws4_request")
+	query.Set("X-Amz-Date", requestTime.Format("20060102T150405Z"))
+	query.Set("X-Amz-Expires", strconv.FormatInt(expires, 10))
+	query.Set("X-Amz-SignedHeaders", "host")
+	query.Set("X-Amz-Content-Sha256", unsignedPayload)
+	req, err := http.NewRequest(http.MethodGet, "https://s3.yeying.pub/services/project/uploads/test.png?"+query.Encode(), nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	canonicalRequest, err := buildCanonicalRequestExcludingSignature(req, []string{"host"}, unsignedPayload)
+	if err != nil {
+		t.Fatalf("build canonical request: %v", err)
+	}
+	scopeDate := requestTime.Format("20060102")
+	scope := scopeDate + "/us-east-1/s3/" + signatureV4Terminator
+	stringToSign := strings.Join([]string{signatureV4Algorithm, requestTime.Format("20060102T150405Z"), scope, sha256Hex([]byte(canonicalRequest))}, "\n")
+	query.Set("X-Amz-Signature", calculateSignature(testSecretKey, scopeDate, "us-east-1", "s3", stringToSign))
+	req.URL.RawQuery = query.Encode()
 	return req
 }
 

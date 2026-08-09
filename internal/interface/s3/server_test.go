@@ -6,11 +6,34 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yeying-community/warehouse/internal/application/service"
 	"github.com/yeying-community/warehouse/internal/domain/s3credential"
 	"github.com/yeying-community/warehouse/internal/domain/user"
+	"github.com/yeying-community/warehouse/internal/infrastructure/config"
 )
+
+func TestAuthenticateAcceptsPresignedURL(t *testing.T) {
+	request := newPresignedGetRequest(t, time.Now().UTC(), 600)
+	credential := s3credential.Credential{
+		AccessKeyID: testAccessKey,
+		Secret:      testSecretKey,
+		OwnerUserID: "project",
+		RootPath:    "/services/project",
+		Permissions: "read",
+		Status:      s3credential.StatusActive,
+	}
+	server := NewServer(config.S3Config{Region: "us-east-1"}, NewStaticCredentialResolver(credential), nil, nil, nil, nil)
+
+	got, err := server.authenticate(request)
+	if err != nil {
+		t.Fatalf("authenticate presigned URL: %v", err)
+	}
+	if got.AccessKeyID != testAccessKey {
+		t.Fatalf("unexpected credential: %q", got.AccessKeyID)
+	}
+}
 
 func TestVisibleS3BucketsFollowsCredentialRootPath(t *testing.T) {
 	tests := []struct {

@@ -125,7 +125,11 @@ func (s *Server) authenticate(req *http.Request) (*s3credential.Credential, erro
 	if s.resolver == nil {
 		return nil, s3credential.ErrNotFound
 	}
+	presigned := req.URL.Query().Get("X-Amz-Algorithm") != ""
 	accessKeyID, err := AccessKeyIDFromAuthorization(req.Header.Get("Authorization"))
+	if presigned {
+		accessKeyID, err = AccessKeyIDFromPresignedRequest(req)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -133,11 +137,17 @@ func (s *Server) authenticate(req *http.Request) (*s3credential.Credential, erro
 	if err != nil {
 		return nil, err
 	}
-	result, err := VerifyHeaderSignature(req, credential.Secret, SignatureV4Config{
+	verificationConfig := SignatureV4Config{
 		Region:               s.config.Region,
 		Service:              "s3",
 		AllowUnsignedPayload: allowUnsignedPayload(req),
-	})
+	}
+	var result *SignatureV4Result
+	if presigned {
+		result, err = VerifyPresignedSignature(req, credential.Secret, verificationConfig)
+	} else {
+		result, err = VerifyHeaderSignature(req, credential.Secret, verificationConfig)
+	}
 	if err != nil {
 		return nil, err
 	}
