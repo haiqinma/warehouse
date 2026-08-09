@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/yeying-community/warehouse/internal/domain/group"
+	"github.com/yeying-community/warehouse/internal/domain/sharegrant"
 	"github.com/yeying-community/warehouse/internal/domain/shareuser"
 	"github.com/yeying-community/warehouse/internal/domain/user"
 	"github.com/yeying-community/warehouse/internal/infrastructure/config"
@@ -281,6 +282,7 @@ func newUploadSessionShareFixture(t *testing.T, permissions string) (*UploadSess
 	}
 	shareService := NewShareUserService(shareRepo, userRepo, nil, nil, cfg, zap.NewNop())
 	svc := NewUploadSessionService(cfg, nil, nil, userRepo, shareService, noopMutationRecorder{}, zap.NewNop())
+	svc.SetSharedResourceAccess(NewSharedResourceAccessService(fakeSharedResourceGrantRepository{resource: &sharegrant.Resource{ID: "resource-" + item.ID}, grants: []sharegrant.Grant{{ID: item.ID, Permissions: permissions, Status: sharegrant.StatusActive}}}))
 	return svc, target, item.ID, sharedDir
 }
 
@@ -323,6 +325,7 @@ func newUploadSessionGroupShareFixture(t *testing.T, permissions string) (*Uploa
 	}
 
 	svc := NewUploadSessionService(cfg, nil, nil, userRepo, shareService, noopMutationRecorder{}, zap.NewNop())
+	svc.SetSharedResourceAccess(NewSharedResourceAccessService(fakeSharedResourceGrantRepository{resource: &sharegrant.Resource{ID: "resource-" + item.ID}, grants: []sharegrant.Grant{{ID: item.ID, Permissions: permissions, Status: sharegrant.StatusActive}}}))
 	return svc, target, item.ID, sharedDir, groupRepo, member.ID
 }
 

@@ -224,6 +224,27 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 		)`,
 
+		// V3 共享资源/授权模型。旧 internal_share_items 与 audiences 在切换读写路径前继续保留。
+		`CREATE TABLE IF NOT EXISTS internal_shared_resources (
+			id VARCHAR(50) PRIMARY KEY,
+			owner_user_id VARCHAR(50) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			normalized_path TEXT NOT NULL,
+			is_dir BOOLEAN NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			UNIQUE(owner_user_id, normalized_path, is_dir)
+		)`,
+		`CREATE TABLE IF NOT EXISTS internal_share_grants (
+			id VARCHAR(50) PRIMARY KEY,
+			resource_id VARCHAR(50) NOT NULL REFERENCES internal_shared_resources(id) ON DELETE CASCADE,
+			legacy_share_id VARCHAR(50) UNIQUE NULL REFERENCES internal_share_items(id) ON DELETE RESTRICT,
+			permissions VARCHAR(10) NOT NULL,
+			expires_at TIMESTAMP NULL,
+			status VARCHAR(20) NOT NULL DEFAULT 'active',
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+
 		// 分组
 		`CREATE TABLE IF NOT EXISTS address_groups (
 			id VARCHAR(50) PRIMARY KEY,
@@ -236,6 +257,7 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS internal_share_audiences (
 			id VARCHAR(50) PRIMARY KEY,
 			share_id VARCHAR(50) NOT NULL REFERENCES internal_share_items(id) ON DELETE CASCADE,
+			grant_id VARCHAR(50) NULL REFERENCES internal_share_grants(id) ON DELETE CASCADE,
 			audience_type VARCHAR(20) NOT NULL,
 			target_user_id VARCHAR(50) NULL REFERENCES users(id) ON DELETE CASCADE,
 			target_wallet_address VARCHAR(255) NULL,
@@ -398,6 +420,7 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 		`ALTER TABLE share_items ALTER COLUMN creator_user_id SET NOT NULL`,
 		`ALTER TABLE share_items ADD COLUMN IF NOT EXISTS source_share_id VARCHAR(50) NULL`,
 		`ALTER TABLE internal_share_items ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'`,
+		`ALTER TABLE internal_share_audiences ADD COLUMN IF NOT EXISTS grant_id VARCHAR(50) NULL REFERENCES internal_share_grants(id) ON DELETE CASCADE`,
 		`ALTER TABLE recycle_items ADD COLUMN IF NOT EXISTS is_dir BOOLEAN NOT NULL DEFAULT FALSE`,
 
 		// 创建回收站的哈希索引
@@ -416,7 +439,12 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_internal_share_items_owner_created
 			ON internal_share_items(owner_user_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_internal_share_items_path ON internal_share_items(path)`,
+		`CREATE INDEX IF NOT EXISTS idx_internal_shared_resources_owner_path
+			ON internal_shared_resources(owner_user_id, normalized_path)`,
+		`CREATE INDEX IF NOT EXISTS idx_internal_share_grants_resource_status
+			ON internal_share_grants(resource_id, status)`,
 		`CREATE INDEX IF NOT EXISTS idx_internal_share_audiences_share ON internal_share_audiences(share_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_internal_share_audiences_grant ON internal_share_audiences(grant_id) WHERE grant_id IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_internal_share_audiences_target_user
 			ON internal_share_audiences(target_user_id)
 			WHERE target_user_id IS NOT NULL`,

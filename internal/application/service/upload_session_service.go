@@ -97,14 +97,22 @@ type UploadSessionTarget struct {
 }
 
 type UploadSessionService struct {
-	config           *config.Config
-	permissionCheck  permission.Checker
-	quotaService     quota.Service
-	userRepo         user.Repository
-	shareUserService *ShareUserService
-	mutationRecorder MutationRecorder
-	logger           *zap.Logger
-	locks            sync.Map
+	config               *config.Config
+	permissionCheck      permission.Checker
+	quotaService         quota.Service
+	userRepo             user.Repository
+	shareUserService     *ShareUserService
+	sharedResourceAccess *SharedResourceAccessService
+	mutationRecorder     MutationRecorder
+	logger               *zap.Logger
+	locks                sync.Map
+}
+
+// SetSharedResourceAccess makes shared upload permission checks V3-authoritative.
+func (s *UploadSessionService) SetSharedResourceAccess(access *SharedResourceAccessService) {
+	if s != nil {
+		s.sharedResourceAccess = access
+	}
 }
 
 func NewUploadSessionService(
@@ -520,10 +528,6 @@ func (s *UploadSessionService) resolveShareTarget(ctx context.Context, uploader 
 	if isIgnoredUploadPath(targetPath) {
 		return nil, ErrUploadSessionInvalid
 	}
-	perms := user.ParsePermissions(item.Permissions)
-	if strings.TrimSpace(item.Permissions) == "" {
-		perms = user.DefaultPermissions()
-	}
 	op := permission.OperationCreate
 	if _, err := os.Stat(fullPath); err == nil {
 		op = permission.OperationWrite
@@ -533,11 +537,10 @@ func (s *UploadSessionService) resolveShareTarget(ctx context.Context, uploader 
 	if err := enforceAppScope(ctx, s.config, item.Path, requiredActionForUploadOperation(op)); err != nil {
 		return nil, err
 	}
-	if op == permission.OperationWrite {
-		if !perms.Has("U") {
-			return nil, ErrUploadSessionForbidden
-		}
-	} else if !perms.Has("C") {
+	if s.sharedResourceAccess == nil {
+		return nil, fmt.Errorf("%w: shared resource access is not configured", ErrUploadSessionForbidden)
+	}
+	if _, err := s.sharedResourceAccess.AuthorizeLegacyShare(ctx, item.ID, uploader.ID, permission.MapOperationToPermission(op), time.Now()); err != nil {
 		return nil, ErrUploadSessionForbidden
 	}
 	return &UploadSessionTarget{Owner: owner, FullPath: fullPath, TargetPath: targetPath, Operation: op}, nil
