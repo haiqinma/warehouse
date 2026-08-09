@@ -43,6 +43,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "share":
+			if err := runShareCommand(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to run share command: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "serve":
 			runServer(os.Args[2:])
 			return

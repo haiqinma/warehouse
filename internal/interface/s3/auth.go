@@ -2,6 +2,7 @@ package s3
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/yeying-community/warehouse/internal/domain/s3credential"
@@ -16,6 +17,17 @@ type CredentialResolver interface {
 
 func AccessKeyIDFromAuthorization(raw string) (string, error) {
 	authorization, err := parseAuthorization(raw)
+	if err != nil {
+		return "", err
+	}
+	return authorization.accessKeyID, nil
+}
+
+func AccessKeyIDFromPresignedRequest(req *http.Request) (string, error) {
+	if req == nil {
+		return "", ErrMissingAuthorization
+	}
+	authorization, err := parsePresignedAuthorization(req.URL.Query())
 	if err != nil {
 		return "", err
 	}

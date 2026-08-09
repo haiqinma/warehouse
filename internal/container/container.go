@@ -35,41 +35,43 @@ type Container struct {
 	DB *database.PostgresDB
 
 	// Repositories
-	UserRepository        user.Repository
-	RecycleRepository     repository.RecycleRepository
-	ShareRepository       repository.ShareRepository
-	UserShareRepository   repository.UserShareRepository
-	GroupRepository       repository.GroupRepository
-	WebDAVAccessKeyRepo   repository.WebDAVAccessKeyRepository
-	S3CredentialRepo      repository.S3CredentialRepository
-	S3MultipartRepo       repository.S3MultipartRepository
-	S3ObjectMetadataRepo  repository.S3ObjectMetadataRepository
-	NotificationRepo      repository.NotificationRepository
-	ReplicationOutboxRepo repository.ReplicationOutboxRepository
-	ReplicationOffsetRepo repository.ReplicationOffsetRepository
-	ReconcileRepo         repository.ReplicationReconcileRepository
-	ClusterNodeRepo       repository.ClusterNodeRepository
-	ClusterAssignmentRepo repository.ClusterReplicationAssignmentRepository
+	UserRepository                user.Repository
+	RecycleRepository             repository.RecycleRepository
+	ShareRepository               repository.ShareRepository
+	UserShareRepository           repository.UserShareRepository
+	SharedResourceGrantRepository repository.SharedResourceGrantRepository
+	GroupRepository               repository.GroupRepository
+	WebDAVAccessKeyRepo           repository.WebDAVAccessKeyRepository
+	S3CredentialRepo              repository.S3CredentialRepository
+	S3MultipartRepo               repository.S3MultipartRepository
+	S3ObjectMetadataRepo          repository.S3ObjectMetadataRepository
+	NotificationRepo              repository.NotificationRepository
+	ReplicationOutboxRepo         repository.ReplicationOutboxRepository
+	ReplicationOffsetRepo         repository.ReplicationOffsetRepository
+	ReconcileRepo                 repository.ReplicationReconcileRepository
+	ClusterNodeRepo               repository.ClusterNodeRepository
+	ClusterAssignmentRepo         repository.ClusterReplicationAssignmentRepository
 
 	// Services
-	QuotaService           quota.Service
-	QuotaReconciler        *service.QuotaReconciler
-	AssetSpaceManager      *assetspace.Manager
-	MutationRecorder       service.MutationRecorder
-	NodeHeartbeat          *service.NodeHeartbeatRegistrar
-	PeerResolver           service.ReplicationPeerResolver
-	AssignmentAllocator    *service.ReplicationAssignmentAllocator
-	ReplicationWorker      *service.ReplicationWorker
-	ReconcileScanner       *service.ReconcileScanner
-	ReplicationCleaner     *service.ReplicationLifecycleCleaner
-	WebDAVService          *service.WebDAVService
-	RecycleService         *service.RecycleService
-	ShareService           *service.ShareService
-	ShareUserService       *service.ShareUserService
-	GroupService           *service.GroupService
-	WebDAVAccessKeyService *service.WebDAVAccessKeyService
-	NotificationService    *service.NotificationService
-	UploadSessionService   *service.UploadSessionService
+	QuotaService                quota.Service
+	QuotaReconciler             *service.QuotaReconciler
+	AssetSpaceManager           *assetspace.Manager
+	MutationRecorder            service.MutationRecorder
+	NodeHeartbeat               *service.NodeHeartbeatRegistrar
+	PeerResolver                service.ReplicationPeerResolver
+	AssignmentAllocator         *service.ReplicationAssignmentAllocator
+	ReplicationWorker           *service.ReplicationWorker
+	ReconcileScanner            *service.ReconcileScanner
+	ReplicationCleaner          *service.ReplicationLifecycleCleaner
+	WebDAVService               *service.WebDAVService
+	RecycleService              *service.RecycleService
+	ShareService                *service.ShareService
+	ShareUserService            *service.ShareUserService
+	SharedResourceAccessService *service.SharedResourceAccessService
+	GroupService                *service.GroupService
+	WebDAVAccessKeyService      *service.WebDAVAccessKeyService
+	NotificationService         *service.NotificationService
+	UploadSessionService        *service.UploadSessionService
 
 	// Authenticators
 	Authenticators       []auth.Authenticator
@@ -238,6 +240,9 @@ func (c *Container) initDatabase() error {
 	if err := c.DB.Migrate(ctx); err != nil {
 		return fmt.Errorf("failed to migrate database: %w", err)
 	}
+	if err := c.DB.ReconcileSharedResources(ctx); err != nil {
+		return fmt.Errorf("failed to reconcile shared resources: %w", err)
+	}
 
 	c.Logger.Info("database initialized",
 		zap.String("type", "postgres"),
@@ -265,6 +270,7 @@ func (c *Container) initRepositories() error {
 	c.ShareRepository = repository.NewPostgresShareRepository(c.DB.DB)
 	// 定向分享仓储
 	c.UserShareRepository = repository.NewPostgresUserShareRepository(c.DB.DB)
+	c.SharedResourceGrantRepository = repository.NewPostgresSharedResourceGrantRepository(c.DB.DB)
 	// 分组管理仓储
 	c.GroupRepository = repository.NewPostgresGroupRepository(c.DB.DB)
 	// WebDAV 访问密钥仓储
@@ -386,6 +392,8 @@ func (c *Container) initServices() error {
 		c.MutationRecorder,
 		c.Logger,
 	)
+	c.SharedResourceAccessService = service.NewSharedResourceAccessService(c.SharedResourceGrantRepository)
+	c.UploadSessionService.SetSharedResourceAccess(c.SharedResourceAccessService)
 
 	c.Logger.Info("services initialized", zap.Bool("quota_enabled", true))
 
