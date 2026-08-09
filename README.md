@@ -147,7 +147,7 @@ curl http://127.0.0.1:6065/api/v1/public/health/readiness
 ./scripts/test.sh --suite unit --format junit --output test-results/unit.xml
 ```
 
-正式部署后的低风险冒烟测试使用 `--suite smoke`。将 `.env.test.template` 复制为被 Git 忽略的 `.env.test`，脚本会自动加载；CI 也可以直接注入环境变量，已导出的变量优先于文件配置。WebDAV 普通账号、WebDAV 目录访问密钥和 S3 凭证分别配置、分别验证，未配置的协议凭证用例会跳过。当前 smoke 只执行 readiness、WebDAV 只读 `PROPFIND` 和 S3 `ListBuckets`，不会创建、删除或遗留业务资产。
+正式部署后的低风险冒烟测试使用 `--suite smoke`。将 `.env.template` 复制为被 Git 忽略的 `.env`，脚本会自动加载；CI 也可以直接注入环境变量，已导出的变量优先于文件配置。WebDAV 普通账号、WebDAV 目录访问密钥和 S3 凭证分别配置、分别验证，未配置的协议凭证用例会跳过。当前 smoke 只执行 readiness、WebDAV 只读 `PROPFIND` 和 S3 `ListBuckets`，不会创建、删除或遗留业务资产。
 
 ```bash
 ./scripts/test.sh --suite smoke --environment prod --format json

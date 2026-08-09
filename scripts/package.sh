@@ -198,7 +198,7 @@ create_package() {
   cp "${ROOT_DIR}/scripts/starter.sh" "${staging_dir}/scripts/"
   cp "${ROOT_DIR}/scripts/health-check.sh" "${staging_dir}/scripts/"
   cp "${ROOT_DIR}/scripts/test.sh" "${staging_dir}/scripts/"
-  cp "${ROOT_DIR}/.env.test.template" "${staging_dir}/"
+  cp "${ROOT_DIR}/.env.template" "${staging_dir}/"
   if [[ -d "${ROOT_DIR}/resources" ]]; then
     cp -R "${ROOT_DIR}/resources" "${staging_dir}/"
   fi

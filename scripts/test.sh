@@ -7,7 +7,7 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Load the local test configuration automatically. Values explicitly exported by
 # the caller take precedence, so CI and production secret injection remain safe.
-TEST_ENV_FILE="${TEST_ENV_FILE:-${PROJECT_DIR}/.env.test}"
+TEST_ENV_FILE="${TEST_ENV_FILE:-${PROJECT_DIR}/.env}"
 if [[ -f "${TEST_ENV_FILE}" ]]; then
   EXPORTED_TEST_VARIABLES=()
   EXPORTED_TEST_VALUES=()
@@ -84,7 +84,7 @@ Common environment variables:
   TEST_BASE_URL, TEST_RUN_ID, TEST_ENV_FILE
 
 Configuration file:
-  .env.test                    Loaded automatically when present
+  .env                         Loaded automatically when present
   TEST_ENV_FILE                Override the configuration file path
 
 Smoke credentials:
