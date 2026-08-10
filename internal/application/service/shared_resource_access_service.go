@@ -62,3 +62,24 @@ func (s *SharedResourceAccessService) EffectivePermissions(ctx context.Context, 
 	}
 	return resource, sharegrant.EffectivePermissions(grants, now).String(), nil
 }
+
+func (s *SharedResourceAccessService) ListReceivedResources(ctx context.Context, targetUserID string, now time.Time) ([]sharegrant.ReceivedResource, error) {
+	if s == nil || s.repository == nil {
+		return nil, fmt.Errorf("shared resource access service is not configured")
+	}
+	return s.repository.ListReceivedResources(ctx, targetUserID, now)
+}
+
+func (s *SharedResourceAccessService) MoveOwnerPaths(ctx context.Context, ownerUserID, fromPath, toPath string) error {
+	if s == nil || s.repository == nil {
+		return fmt.Errorf("shared resource access service is not configured")
+	}
+	return s.repository.MoveOwnerPaths(ctx, ownerUserID, fromPath, toPath)
+}
+
+func (s *SharedResourceAccessService) DeleteOwnerPaths(ctx context.Context, ownerUserID, targetPath string) error {
+	if s == nil || s.repository == nil {
+		return fmt.Errorf("shared resource access service is not configured")
+	}
+	return s.repository.DeleteOwnerPaths(ctx, ownerUserID, targetPath)
+}

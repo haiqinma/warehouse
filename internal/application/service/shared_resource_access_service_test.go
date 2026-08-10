@@ -25,6 +25,18 @@ func (r fakeSharedResourceGrantRepository) GetResourceIDByLegacyShareID(context.
 	return r.resource.ID, r.err
 }
 
+func (r fakeSharedResourceGrantRepository) ListReceivedResources(context.Context, string, time.Time) ([]sharegrant.ReceivedResource, error) {
+	return nil, r.err
+}
+
+func (r fakeSharedResourceGrantRepository) MoveOwnerPaths(context.Context, string, string, string) error {
+	return r.err
+}
+
+func (r fakeSharedResourceGrantRepository) DeleteOwnerPaths(context.Context, string, string) error {
+	return r.err
+}
+
 func TestSharedResourceAccessServiceAuthorizesOnlyAnEffectiveAction(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	expired := now.Add(-time.Second)

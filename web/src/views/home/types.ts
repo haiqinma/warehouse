@@ -31,6 +31,7 @@ export type UploadTask = {
   targetPath?: string
   isShared: boolean
   shareId?: string
+  resourceId?: string
   sharePath?: string
   encryptedRoot?: string
   cipherSuite?: string

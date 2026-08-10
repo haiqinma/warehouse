@@ -4,7 +4,7 @@ import { storeToRefs } from 'pinia'
 import { ArrowLeft, ArrowRight, ArrowUp, Delete, Expand, Fold, Folder, FolderAdd, FolderOpened, Grid, Refresh, Upload, DocumentCopy, Share, Search, MoreFilled, Notebook, User, Lock, Unlock } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { getSupportedCipherSuites, type CipherSuiteInfo } from '@yeying-community/web3-bs'
-import { quotaApi, userApi, recycleApi, shareApi, directShareApi, assetsApi, webdavAccessKeyApi, s3CredentialApi, adminUserApi, type RecycleItem, type ShareItem, type DirectShareItem, type AssetSpaceInfo, type ShareExpiryUnit, type ShareMode, type AccessKeyPermission, type WebDAVAccessKeyItem, type CreateWebDAVAccessKeyResult, type S3CredentialItem, type CreateS3CredentialResult, type AdminUserItem, type GroupMember } from '@/api'
+import { quotaApi, userApi, recycleApi, shareApi, directShareApi, assetsApi, webdavAccessKeyApi, s3CredentialApi, adminUserApi, type RecycleItem, type ShareItem, type DirectShareItem, type ReceivedSharedResource, type AssetSpaceInfo, type ShareExpiryUnit, type ShareMode, type AccessKeyPermission, type WebDAVAccessKeyItem, type CreateWebDAVAccessKeyResult, type S3CredentialItem, type CreateS3CredentialResult, type AdminUserItem, type GroupMember } from '@/api'
 import { AUTH_CHANGED_EVENT, isLoggedIn, getUsername, getWalletName, getCurrentAccount, getUserPermissions, getUserCreatedAt, loginWithWallet, focusPendingWalletApproval, loginWithPassword, sendEmailCode, loginWithEmailCode, getAccountHistory, watchWalletAccounts, watchWalletProvider } from '@/plugins/auth'
 import { decryptBlobContent, encryptFileContent, encryptTextContent } from '@/utils/crypto'
 import {
@@ -97,9 +97,9 @@ const directShareList = ref<DirectShareItem[]>([])
 const directShareLoading = ref(false)
 const showSharedWithMe = ref(false)
 const showHelp = ref(false)
-const sharedWithMeList = ref<DirectShareItem[]>([])
+const sharedWithMeList = ref<ReceivedSharedResource[]>([])
 const sharedWithMeLoading = ref(false)
-const sharedActive = ref<DirectShareItem | null>(null)
+const sharedActive = ref<ReceivedSharedResource | null>(null)
 const sharedPath = ref('/')
 const sharedEntries = ref<FileItem[]>([])
 const sharedEntriesLoading = ref(false)
@@ -121,7 +121,7 @@ const credentialTab = ref<CredentialTab>('webdav')
 const manualRefresh = ref(false)
 const detailDrawerVisible = ref(false)
 const detailMode = ref<'file' | 'recycle' | 'share' | 'directShare' | 'receivedShare' | 'sharedEntry' | null>(null)
-const detailItem = ref<FileItem | RecycleItem | ShareItem | DirectShareItem | null>(null)
+const detailItem = ref<FileItem | RecycleItem | ShareItem | DirectShareItem | ReceivedSharedResource | null>(null)
 const selectedFileRows = ref<FileItem[]>([])
 const fileSelectionMode = ref(false)
 const fileSelectionNonce = ref(0)
@@ -136,7 +136,6 @@ const movingSharedByDrag = ref(false)
 const shareLinkDialogVisible = ref(false)
 const shareLinkSubmitting = ref(false)
 const shareLinkTarget = ref<FileItem | null>(null)
-const shareLinkReceivedContext = ref<{ shareId: string; relativePath: string } | null>(null)
 const shareLinkForm = ref(createDefaultShareLinkForm())
 const shareUserDialogVisible = ref(false)
 const shareUserSubmitting = ref(false)
@@ -578,7 +577,7 @@ const detailFile = computed(() => (detailMode.value === 'file' ? (detailItem.val
 const detailRecycle = computed(() => (detailMode.value === 'recycle' ? (detailItem.value as RecycleItem | null) : null))
 const detailShare = computed(() => (detailMode.value === 'share' ? (detailItem.value as ShareItem | null) : null))
 const detailDirectShare = computed(() => (detailMode.value === 'directShare' ? (detailItem.value as DirectShareItem | null) : null))
-const detailReceivedShare = computed(() => (detailMode.value === 'receivedShare' ? (detailItem.value as DirectShareItem | null) : null))
+const detailReceivedShare = computed(() => (detailMode.value === 'receivedShare' ? (detailItem.value as ReceivedSharedResource | null) : null))
 const detailSharedEntry = computed(() => (detailMode.value === 'sharedEntry' ? (detailItem.value as FileItem | null) : null))
 const previewTitle = computed(() => {
   if (!previewTarget.value) return '文件预览'
@@ -739,11 +738,7 @@ function isDirectShareOwner(item: DirectShareItem): boolean {
 
 const mergedDirectShareList = computed<DirectShareListItem[]>(() => {
   const ownedRows = directShareList.value.map(item => ({ ...item, relation: 'owned' as const }))
-  const seen = new Set(ownedRows.map(item => item.id))
-  const receivedRows = sharedWithMeList.value
-    .filter(item => !seen.has(item.id))
-    .map(item => ({ ...item, relation: 'received' as const }))
-  return [...ownedRows, ...receivedRows].sort((a, b) => {
+  return ownedRows.sort((a, b) => {
     const timeA = Date.parse(a.createdAt || '') || 0
     const timeB = Date.parse(b.createdAt || '') || 0
     return timeB - timeA
@@ -823,9 +818,6 @@ const filteredDirectShareList = computed(() => {
     if (item.name.toLowerCase().includes(token)) return true
     if (item.path?.toLowerCase().includes(token)) return true
     if (item.targetWallet?.toLowerCase().includes(token)) return true
-    if (item.targetGroups?.some(group => group.name.toLowerCase().includes(token) || group.id.toLowerCase().includes(token))) return true
-    if (item.ownerName?.toLowerCase().includes(token)) return true
-    if (item.ownerWallet?.toLowerCase().includes(token)) return true
     const relationLabel = isDirectShareOwner(item) ? '我分享的' : '分享我的'
     return relationLabel.includes(token)
   })
@@ -836,7 +828,7 @@ const filteredSharedWithMeList = computed(() => {
   return sharedWithMeList.value.filter(item => {
     if (item.name.toLowerCase().includes(token)) return true
     if (item.ownerName?.toLowerCase().includes(token)) return true
-    if (item.targetGroups?.some(group => group.name.toLowerCase().includes(token) || group.id.toLowerCase().includes(token))) return true
+    if (`${item.grantCount} 条有效授权`.includes(token)) return true
     return item.ownerWallet?.toLowerCase().includes(token) || false
   })
 })
@@ -991,10 +983,6 @@ function buildApiPath(path: string): string {
   const rawBase = String(API_BASE || '').trim().replace(/\/+$/, '')
   const normalized = path.startsWith('/') ? path : `/${path}`
   return `${rawBase}${normalized}`
-}
-
-function buildShareDavRoot(shareID: string): string {
-  return buildDavPath(`/share/${shareID}`)
 }
 
 function buildShareDavPath(shareID: string, path: string = ''): string {
@@ -2443,7 +2431,9 @@ function openDetailDrawer(mode: 'file' | 'recycle', item: FileItem | RecycleItem
   detailDrawerVisible.value = true
 }
 
-function openShareDetail(mode: 'share' | 'directShare' | 'receivedShare', item: ShareItem | DirectShareItem) {
+function openShareDetail(mode: 'share' | 'directShare', item: ShareItem | DirectShareItem): void
+function openShareDetail(mode: 'receivedShare', item: ReceivedSharedResource): void
+function openShareDetail(mode: 'share' | 'directShare' | 'receivedShare', item: ShareItem | DirectShareItem | ReceivedSharedResource) {
   detailItem.value = item
   detailMode.value = mode
   detailDrawerVisible.value = true
@@ -2451,6 +2441,16 @@ function openShareDetail(mode: 'share' | 'directShare' | 'receivedShare', item: 
 
 function openDirectShareDetail(item: DirectShareItem) {
   openShareDetail('directShare', item)
+}
+
+// Owner-managed direct shares remain on their existing management surface.
+// They are intentionally kept separate from received V3 resource browsing.
+function enterDirectShareRoot(item: DirectShareItem) {
+  openDirectShareDetail(item)
+}
+
+function downloadDirectShareRoot(_item: DirectShareItem) {
+  showInfo('定向分享目录请从资产列表下载')
 }
 
 function openSharedEntryDetail(item: FileItem) {
@@ -2479,7 +2479,7 @@ async function openFilePreview(item: FileItem) {
   try {
     const token = localStorage.getItem('authToken') || ''
     const previewURL = isSharedBrowse.value && sharedActive.value
-      ? buildShareUserPreviewUrl(sharedActive.value.id, item.path)
+      ? `/api/v1/public/share/resource/download?${new URLSearchParams({ resourceId: sharedActive.value.resourceId, path: normalizeShareRelative(item.path) })}`
       : buildDavPath(item.path)
     if (item.encryptedRoot) {
       if (isSharedBrowse.value) {
@@ -2583,22 +2583,25 @@ async function savePreview() {
   try {
     const token = localStorage.getItem('authToken') || ''
     if (isSharedBrowse.value && sharedActive.value) {
-      const relPath = normalizeShareRelative(previewTarget.value.path)
-      const response = await fetch(buildShareDavPath(sharedActive.value.id, relPath), {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'text/plain; charset=utf-8'
-        },
-        body: previewContent.value
+      const relativePath = normalizeShareRelative(previewTarget.value.path)
+      if (!relativePath) throw new Error('不能编辑共享根目录')
+      const file = new File([previewContent.value], previewTarget.value.name, {
+        type: 'text/plain;charset=utf-8',
+        lastModified: Date.now()
       })
-      if (!response.ok) {
-        const text = (await response.text()).trim()
-        throw new Error(normalizeUserFacingErrorMessage(text, `保存失败: ${response.status}`))
-      }
+      const task = createUploadTask(
+        { file, relativePath },
+        { basePath: '', isShared: true, resourceId: sharedActive.value.resourceId }
+      )
+      // Reuse upload sessions so text editing observes the same quota, atomic
+      // write, effective-grant and mutation-recording rules as file uploads.
+      addUploadTasks([task])
+      await performUploadTask(task)
+      const completedTask = uploadTaskStore.tasks.find(item => item.id === task.id)
+      if (completedTask?.status !== 'success') throw new Error(completedTask?.error || '保存失败')
       previewOrigin.value = previewContent.value
       showSuccess('已保存')
-      fetchSharedEntries(sharedPath.value)
+      await fetchSharedEntries(sharedPath.value)
     } else {
       const body = previewTarget.value.encryptedRoot
         ? await encryptTextContent(
@@ -2645,7 +2648,7 @@ function previewAdjacentImage(direction: 'prev' | 'next') {
   openFilePreview(target)
 }
 
-function handleRowClick(row: FileItem | RecycleItem | ShareItem | DirectShareItem) {
+function handleRowClick(row: FileItem | RecycleItem | ShareItem | DirectShareItem | ReceivedSharedResource) {
   if (showQuotaManage.value || showGroupView.value) return
   if (showRecycle.value) {
     openDetailDrawer('recycle', row as RecycleItem)
@@ -2657,7 +2660,9 @@ function handleRowClick(row: FileItem | RecycleItem | ShareItem | DirectShareIte
     } else {
       const item = row as DirectShareItem
       if (item.isDir) {
-        enterSharedRoot(item)
+        // Owner-side directory browsing remains on its legacy route until its
+        // separate state is migrated; do not send it into received resources.
+        openDirectShareDetail(item)
       } else {
         openDirectShareDetail(item)
       }
@@ -2666,7 +2671,7 @@ function handleRowClick(row: FileItem | RecycleItem | ShareItem | DirectShareIte
   }
   if (showSharedWithMe.value) {
     if (!sharedActive.value) {
-      const item = row as DirectShareItem
+      const item = row as ReceivedSharedResource
       if (item.isDir) {
         enterSharedRoot(item)
       } else {
@@ -2789,10 +2794,6 @@ async function downloadFile(item: FileItem) {
   }
 }
 
-function buildShareUserPreviewUrl(shareID: string, filePath: string) {
-  return buildShareDavPath(shareID, filePath)
-}
-
 function normalizeShareRelative(path: string) {
   return path.replace(/^\/+/, '').replace(/\/$/, '')
 }
@@ -2883,9 +2884,9 @@ async function revokeSharesBeforeDelete(item: FileItem): Promise<{ proceed: bool
   }
 }
 
-async function downloadSharedRoot(item: DirectShareItem) {
-  if (!item || item.isDir) return
-  const url = buildShareDavPath(item.id)
+async function downloadSharedRoot(item: ReceivedSharedResource) {
+	if (!item || item.isDir) return
+	const url = `/api/v1/public/share/resource/download?${new URLSearchParams({ resourceId: item.resourceId })}`
   showInfo('下载中...')
   try {
     const token = localStorage.getItem('authToken') || ''
@@ -2903,7 +2904,7 @@ async function downloadSharedFile(item: FileItem) {
     return
   }
   const relPath = normalizeShareRelative(item.path)
-  const url = buildShareDavPath(sharedActive.value.id, relPath)
+  const url = `/api/v1/public/share/resource/download?${new URLSearchParams({ resourceId: sharedActive.value.resourceId, path: relPath })}`
   showInfo('下载中...')
   try {
     const token = localStorage.getItem('authToken') || ''
@@ -3002,13 +3003,13 @@ async function submitRename() {
       const fromPath = context.normalized.replace(/^\/+/, '')
       const toPath = (context.parentPath === '/' ? '/' + newName : context.parentPath + newName).replace(/^\/+/, '')
       const token = localStorage.getItem('authToken') || ''
-      const response = await fetch(buildShareDavPath(sharedActive.value.id, fromPath + (context.isDir ? '/' : '')), {
-        method: 'MOVE',
+      const response = await fetch('/api/v1/public/share/resource/rename', {
+        method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Destination': buildShareDavPath(sharedActive.value.id, toPath + (context.isDir ? '/' : '')),
-          'Overwrite': 'F'
-        }
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ resourceId: sharedActive.value.resourceId, fromPath, toPath })
       })
       if (!response.ok) {
         const text = (await response.text()).trim()
@@ -3032,26 +3033,6 @@ async function shareFile(item: FileItem) {
     return
   }
   shareLinkTarget.value = item
-  shareLinkReceivedContext.value = null
-  shareLinkForm.value = createDefaultShareLinkForm()
-  shareLinkDialogVisible.value = true
-}
-
-function shareReceivedRoot(item: DirectShareItem) {
-  if (item.isDir || !item.permissions?.includes('read')) return
-  shareLinkTarget.value = { name: item.name, path: item.path, isDir: false, size: 0, modified: item.createdAt || '' }
-  shareLinkReceivedContext.value = { shareId: item.id, relativePath: '' }
-  shareLinkForm.value = createDefaultShareLinkForm()
-  shareLinkDialogVisible.value = true
-}
-
-function shareReceivedFile(item: FileItem) {
-  if (!sharedActive.value || item.isDir || !sharedCanRead.value) return
-  shareLinkTarget.value = item
-  shareLinkReceivedContext.value = {
-    shareId: sharedActive.value.id,
-    relativePath: normalizeShareRelative(item.path)
-  }
   shareLinkForm.value = createDefaultShareLinkForm()
   shareLinkDialogVisible.value = true
 }
@@ -3063,20 +3044,13 @@ async function submitShareLink() {
 
   shareLinkSubmitting.value = true
   try {
-    const data = shareLinkReceivedContext.value
-      ? await shareApi.createFromReceived({
-          ...shareLinkReceivedContext.value,
-          ...expiryPayload,
-          mode: shareLinkForm.value.mode
-        })
-      : await shareApi.create(shareLinkTarget.value.path, {
-          ...expiryPayload,
-          mode: shareLinkForm.value.mode
-        })
+    const data = await shareApi.create(shareLinkTarget.value.path, {
+      ...expiryPayload,
+      mode: shareLinkForm.value.mode
+    })
     const url = data.url || `${window.location.origin}/api/v1/public/share/${data.token}`
     await copyText(url, '分享链接已复制')
     shareLinkDialogVisible.value = false
-    shareLinkReceivedContext.value = null
   } catch (error: any) {
     console.error('创建分享失败:', error)
     showError(error?.message || '创建分享失败')
@@ -3240,7 +3214,7 @@ function getSharedUploadPrecheckError(task: UploadTask): string {
   return `同名文件已存在，当前共享没有修改权限，不能覆盖：${existing.name}`
 }
 
-function createUploadTask(item: UploadItem, options: { basePath: string; isShared: boolean; shareId?: string; encryptedRoot?: string | null; cipherSuite?: string }): UploadTask {
+function createUploadTask(item: UploadItem, options: { basePath: string; isShared: boolean; shareId?: string; resourceId?: string; encryptedRoot?: string | null; cipherSuite?: string }): UploadTask {
   const relativePath = normalizeRelativePath(item.relativePath || item.file.name) || item.file.name
   const targetPath = buildTargetPath(options.basePath, relativePath)
   const now = Date.now()
@@ -3257,6 +3231,7 @@ function createUploadTask(item: UploadItem, options: { basePath: string; isShare
     targetPath: options.isShared ? undefined : targetPath,
     isShared: options.isShared,
     shareId: options.shareId,
+    resourceId: options.resourceId,
     sharePath: options.isShared ? normalizeRelativePath(targetPath) : undefined,
     encryptedRoot: options.encryptedRoot || undefined,
     cipherSuite: options.cipherSuite || undefined,
@@ -3285,6 +3260,7 @@ function updateUploadTask(task: UploadTask, patch: Partial<UploadTask>) {
 
 function getUploadUrlForTask(task: UploadTask): string | null {
   if (task.isShared) {
+    if (task.resourceId) return null
     if (!task.shareId) return null
     const path = normalizeRelativePath(task.sharePath || task.relativePath || task.name)
     return buildShareDavPath(task.shareId, path)
@@ -3369,6 +3345,7 @@ function createUploadSession(task: UploadTask, file: Blob): Promise<UploadSessio
     body: {
       path,
       shareId: task.isShared ? task.shareId : undefined,
+      resourceId: task.isShared ? task.resourceId : undefined,
       size: file.size,
       chunkSize: RESUMABLE_UPLOAD_CHUNK_SIZE,
       fileName: task.name,
@@ -3486,8 +3463,10 @@ function uploadSessionPartWithProgress(
   })
 }
 
-function shouldUseResumableUpload(_task: UploadTask, file: Blob): boolean {
-  return file.size >= RESUMABLE_UPLOAD_THRESHOLD
+function shouldUseResumableUpload(task: UploadTask, file: Blob): boolean {
+  // Received V3 resources have no legacy WebDAV write route. Always use the
+  // resource-authorized upload-session protocol, including for small files.
+  return !!task.resourceId || file.size >= RESUMABLE_UPLOAD_THRESHOLD
 }
 
 async function uploadFileResumable(
@@ -3622,8 +3601,9 @@ async function performUploadTask(task: UploadTask) {
     updateUploadTask(task, { status: 'failed', error: '文件已失效' })
     return
   }
-  const url = getUploadUrlForTask(task)
-  if (!url) {
+  const useResumable = !!task.resourceId || (!!task.file && shouldUseResumableUpload(task, task.file))
+  const url = useResumable ? null : getUploadUrlForTask(task)
+  if (!useResumable && !url) {
     updateUploadTask(task, { status: 'failed', error: '上传目标无效' })
     return
   }
@@ -3645,7 +3625,7 @@ async function performUploadTask(task: UploadTask) {
       })
       averageBytes = result.transmittedBytes > 0 ? result.transmittedBytes : uploadBody.size
     } else {
-      await uploadFileWithProgress(url, uploadBody, token, useMultipart, (progress, loaded, total, speed) => {
+      await uploadFileWithProgress(url!, uploadBody, token, useMultipart, (progress, loaded, total, speed) => {
         updateUploadTask(task, { progress, uploadedBytes: loaded, size: total || task.size, uploadSpeed: speed })
       })
     }
@@ -3712,7 +3692,7 @@ async function uploadFilesWithDirectories(files: UploadItem[], extraDirectories?
   }
 }
 
-async function ensureSharedDirectories(path: string, ensured: Set<string>, shareId: string) {
+async function ensureSharedDirectories(path: string, ensured: Set<string>, resourceId: string) {
   const trimmed = normalizeRelativePath(path)
   if (!trimmed) return
   const segments = trimmed.split('/').filter(Boolean)
@@ -3722,11 +3702,13 @@ async function ensureSharedDirectories(path: string, ensured: Set<string>, share
     if (ensured.has(current)) continue
     try {
       const token = localStorage.getItem('authToken') || ''
-      const response = await fetch(buildShareDavPath(shareId, current + '/'), {
-        method: 'MKCOL',
+      const response = await fetch('/api/v1/public/share/resource/folder', {
+        method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`
-        }
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ resourceId, path: current })
       })
       if (!response.ok && response.status !== 405) {
         const text = (await response.text()).trim()
@@ -3741,7 +3723,7 @@ async function ensureSharedDirectories(path: string, ensured: Set<string>, share
 
 async function uploadSharedFilesWithDirectories(files: UploadItem[], extraDirectories?: Set<string>) {
   if (!sharedActive.value) return
-  const shareId = sharedActive.value.id
+  const resourceId = sharedActive.value.resourceId
   const cleanSharedBase = sharedPath.value.replace(/^\/+/, '').replace(/\/$/, '')
   const ensuredDirs = new Set<string>()
 
@@ -3759,14 +3741,14 @@ async function uploadSharedFilesWithDirectories(files: UploadItem[], extraDirect
     if (relativeDir) directories.add(relativeDir)
   }
 
-  const tasks = files.map(item => createUploadTask(item, { basePath: cleanSharedBase, isShared: true, shareId }))
+  const tasks = files.map(item => createUploadTask(item, { basePath: cleanSharedBase, isShared: true, resourceId }))
   addUploadTasks(tasks)
 
   const dirsToCreate = Array.from(directories).filter(Boolean).sort((a, b) => a.split('/').length - b.split('/').length)
   for (const dir of dirsToCreate) {
     const targetDir = cleanSharedBase ? `${cleanSharedBase}/${dir}` : dir
     try {
-      await ensureSharedDirectories(targetDir, ensuredDirs, shareId)
+      await ensureSharedDirectories(targetDir, ensuredDirs, resourceId)
     } catch (error) {
       console.error('创建目录失败:', dir, error)
     }
@@ -3840,14 +3822,14 @@ async function retryUploadTask(task: UploadTask) {
   if (!await ensureRetryTaskFile(task)) return
   try {
     if (task.isShared) {
-      if (!task.shareId) {
+      if (!task.resourceId) {
         showError('共享信息已失效，无法重试')
         return
       }
       const relative = normalizeRelativePath(task.sharePath || task.relativePath || task.name)
       const dir = relative.includes('/') ? relative.slice(0, relative.lastIndexOf('/')) : ''
       if (dir) {
-        await ensureSharedDirectories(dir, new Set<string>(), task.shareId)
+        await ensureSharedDirectories(dir, new Set<string>(), task.resourceId)
       }
     } else {
       const token = localStorage.getItem('authToken') || ''
@@ -3865,7 +3847,7 @@ async function retryUploadTask(task: UploadTask) {
 
   if (task.status !== 'success') return
   if (task.isShared) {
-    if (showSharedWithMe.value && sharedActive.value?.id === task.shareId) {
+    if (showSharedWithMe.value && sharedActive.value?.resourceId === task.resourceId) {
       fetchSharedEntries(sharedPath.value)
     }
     return
@@ -4227,22 +4209,25 @@ async function moveSharedItemToDirectoryPath(source: FileItem, targetPath: strin
   }
   const destinationPath = `${targetDirPath}${source.name}${source.isDir ? '/' : ''}`
   if (destinationPath === sourcePath) return
-
   movingSharedByDrag.value = true
   try {
-    await fetch(buildShareDavPath(sharedActive.value.id, sourcePath), {
-      method: 'MOVE',
+    const token = localStorage.getItem('authToken') || ''
+    const response = await fetch('/api/v1/public/share/resource/rename', {
+      method: 'POST',
       headers: {
-        'Authorization': `Bearer ${localStorage.getItem('authToken') || ''}`,
-        'Destination': new URL(buildShareDavPath(sharedActive.value.id, destinationPath), window.location.origin).toString(),
-        'Overwrite': 'F'
-      }
-    }).then(async response => {
-      if (!response.ok) {
-        const text = (await response.text()).trim()
-        throw new Error(normalizeUserFacingErrorMessage(text, `移动失败: ${response.status}`))
-      }
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        resourceId: sharedActive.value.resourceId,
+        fromPath: sourcePath,
+        toPath: destinationPath
+      })
     })
+    if (!response.ok) {
+      const text = (await response.text()).trim()
+      throw new Error(normalizeUserFacingErrorMessage(text, `移动失败: ${response.status}`))
+    }
     await fetchSharedEntries(sharedPath.value)
     showSuccess(`已移动到 ${targetDirPath}`)
   } catch (error: any) {
@@ -4442,7 +4427,6 @@ async function deleteSelectedFiles() {
       failedCount += 1
     }
   }
-
   selectedFileRows.value = []
   fileSelectionMode.value = false
   fileSelectionNonce.value += 1
@@ -4490,11 +4474,13 @@ async function deleteSharedItem(item: FileItem) {
   const relPath = normalizeShareRelative(item.path)
   try {
     const token = localStorage.getItem('authToken') || ''
-    const response = await fetch(buildShareDavPath(sharedActive.value.id, relPath + (item.isDir ? '/' : '')), {
-      method: 'DELETE',
+    const response = await fetch('/api/v1/public/share/resource/delete', {
+      method: 'POST',
       headers: {
-        'Authorization': `Bearer ${token}`
-      }
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ resourceId: sharedActive.value.resourceId, path: relPath })
     })
     if (!response.ok) {
       const text = (await response.text()).trim()
@@ -4685,22 +4671,8 @@ async function fetchSharedEntries(path: string = sharedPath.value) {
   if (!sharedActive.value) return
   sharedEntriesLoading.value = true
   try {
-    const cleanPath = path.replace(/^\/+/, '').replace(/\/$/, '')
-    const token = localStorage.getItem('authToken') || ''
-    const davPath = buildShareDavPath(sharedActive.value.id, cleanPath)
-    const response = await fetch(davPath, {
-      method: 'PROPFIND',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Depth': '1'
-      }
-    })
-    if (!response.ok) {
-      const text = (await response.text()).trim()
-      throw new Error(normalizeUserFacingErrorMessage(text, `获取共享目录失败: ${response.status}`))
-    }
-    const xml = await response.text()
-    sharedEntries.value = parsePropfindResponse(xml, davPath, buildShareDavRoot(sharedActive.value.id))
+    const data = await directShareApi.listReceivedResourceEntries(sharedActive.value.resourceId, path)
+    sharedEntries.value = data.items
   } catch (error: any) {
     console.error('获取共享目录失败:', error)
     showError(error?.message || '获取共享目录失败')
@@ -4735,7 +4707,7 @@ function switchShareTab(type: 'link' | 'direct') {
 }
 
 // 进入共享的目录
-function enterSharedRoot(item: DirectShareItem) {
+function enterSharedRoot(item: ReceivedSharedResource) {
   if (!item.isDir) return
   detailDrawerVisible.value = false
   showSharedWithMe.value = true
@@ -4751,6 +4723,7 @@ function enterSharedRoot(item: DirectShareItem) {
   persistSharedState()
   fetchSharedEntries('/')
 }
+
 
 function backToSharedList() {
   detailDrawerVisible.value = false
@@ -5090,13 +5063,15 @@ async function createSharedFolderWithName(name: string) {
   const basePath = sharedPath.value.replace(/^\/+/, '').replace(/\/$/, '')
   const targetPath = basePath ? `${basePath}/${name}` : name
   const token = localStorage.getItem('authToken') || ''
-  const response = await fetch(buildShareDavPath(sharedActive.value.id, targetPath + '/'), {
-    method: 'MKCOL',
+  const response = await fetch('/api/v1/public/share/resource/folder', {
+    method: 'POST',
     headers: {
-      'Authorization': `Bearer ${token}`
-    }
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ resourceId: sharedActive.value.resourceId, path: targetPath })
   })
-  if (!response.ok && response.status !== 405) {
+  if (!response.ok) {
     const text = (await response.text()).trim()
     throw new Error(normalizeUserFacingErrorMessage(text, `创建失败: ${response.status}`))
   }
@@ -5420,7 +5395,7 @@ function clearSharedState() {
 
 function persistSharedState() {
   if (!sharedActive.value) return
-  localStorage.setItem(SHARED_ACTIVE_STORAGE_KEY, sharedActive.value.id)
+  localStorage.setItem(SHARED_ACTIVE_STORAGE_KEY, sharedActive.value.resourceId)
   localStorage.setItem(SHARED_PATH_STORAGE_KEY, sharedPath.value)
 }
 
@@ -5445,16 +5420,14 @@ async function restoreSharedWithMeView() {
 
   sharedWithMeLoading.value = true
   try {
-    const [mineResult, receivedResult] = await Promise.allSettled([
+    const [, receivedResult] = await Promise.allSettled([
       directShareApi.listMine(),
       directShareApi.listReceived()
     ])
-    const mineItems = mineResult.status === 'fulfilled' ? mineResult.value.items : []
     const receivedItems = receivedResult.status === 'fulfilled' ? receivedResult.value.items : []
-    if (mineResult.status === 'fulfilled') directShareList.value = mineItems
     if (receivedResult.status === 'fulfilled') sharedWithMeList.value = receivedItems
 
-    const active = [...receivedItems, ...mineItems].find(item => item.id === activeId && item.isDir)
+    const active = receivedItems.find(item => item.resourceId === activeId && item.isDir)
     if (!active) {
       clearSharedState()
       sharedPath.value = '/'
@@ -6829,12 +6802,10 @@ onBeforeUnmount(() => {
               :shared-can-delete="sharedCanDelete"
               :open-share-detail="openShareDetail"
               :download-shared-root="downloadSharedRoot"
-              :share-received-root="shareReceivedRoot"
               :get-preview-mode="getPreviewMode"
               :open-file-preview="openFilePreview"
               :open-shared-entry-detail="openSharedEntryDetail"
               :download-shared-file="downloadSharedFile"
-              :share-received-file="shareReceivedFile"
               :rename-shared-item="renameSharedItem"
               :delete-shared-item="deleteSharedItem"
             />
@@ -6898,6 +6869,8 @@ onBeforeUnmount(() => {
         :revoke-share="revokeShare"
         :revoke-direct-share="revokeDirectShare"
         :is-direct-share-owner="isDirectShareOwner"
+        :enter-direct-share-root="enterDirectShareRoot"
+        :download-direct-share-root="downloadDirectShareRoot"
         :enter-directory="enterDirectory"
         :open-access-key-dialog="openAccessKeyDialogFromDirectory"
         :get-encrypted-directory-root="getEncryptedDirectoryRootForItem"

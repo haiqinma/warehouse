@@ -295,6 +295,18 @@ export interface ShareTargetGroup {
 // 定向分享项目类型
 export type DirectShareItem = OpenAPISchema<'DirectedShare'>
 
+export interface ReceivedSharedResource {
+  resourceId: string
+  name: string
+  path: string
+  isDir: boolean
+  permissions: string[]
+  grantCount: number
+  ownerName: string
+  ownerWallet?: string
+  createdAt: string
+}
+
 export type ShareExpiryUnit = 'minute' | 'hour' | 'day' | 'week' | 'month' | 'year'
 
 export interface ManagedGroup {
@@ -371,28 +383,6 @@ export const shareApi = {
     })
   },
 
-  createFromReceived(payload: {
-    shareId: string
-    relativePath?: string
-    mode?: ShareMode
-    expiresValue?: number
-    expiresUnit?: ShareExpiryUnit
-  }) {
-    return request<{
-      token: string
-      name: string
-      path: string
-      mode: ShareMode
-      url: string
-      viewCount: number
-      downloadCount: number
-      expiresAt?: string
-    }>('/api/v1/public/share/create-from-received', {
-      method: 'POST',
-      body: payload as unknown as Record<string, unknown>
-    })
-  },
-
   list() {
     return request<{
       items: ShareItem[]
@@ -433,8 +423,13 @@ export const directShareApi = {
 
   listReceived() {
     return request<{
-      items: DirectShareItem[]
+      items: ReceivedSharedResource[]
     }>('/api/v1/public/share/user/received')
+  },
+
+  listReceivedResourceEntries(resourceId: string, path = '') {
+    const query = new URLSearchParams({ resourceId, path })
+    return request<{ items: Array<{ name: string; path: string; isDir: boolean; size: number; modified: string }> }>(`/api/v1/public/share/resource/entries?${query}`)
   },
 
   revoke(id: string) {

@@ -28,11 +28,16 @@ import (
 
 // ShareUserHandler 定向分享处理器
 type ShareUserHandler struct {
-	shareUserService *service.ShareUserService
-	userRepo         user.Repository
-	mutationRecorder service.MutationRecorder
-	publicShareRepo  repository.ShareRepository
-	logger           *zap.Logger
+	shareUserService     *service.ShareUserService
+	sharedResourceAccess *service.SharedResourceAccessService
+	userRepo             user.Repository
+	mutationRecorder     service.MutationRecorder
+	publicShareRepo      repository.ShareRepository
+	logger               *zap.Logger
+}
+
+func (h *ShareUserHandler) SetSharedResourceAccess(access *service.SharedResourceAccessService) {
+	h.sharedResourceAccess = access
 }
 
 func (h *ShareUserHandler) SetPublicShareRepository(repo repository.ShareRepository) {
@@ -66,6 +71,18 @@ type shareUserItemResp struct {
 	OwnerName     string                 `json:"ownerName,omitempty"`
 	ExpiresAt     string                 `json:"expiresAt,omitempty"`
 	CreatedAt     string                 `json:"createdAt"`
+}
+
+type receivedSharedResourceResp struct {
+	ResourceID  string   `json:"resourceId"`
+	Name        string   `json:"name"`
+	Path        string   `json:"path"`
+	IsDir       bool     `json:"isDir"`
+	Permissions []string `json:"permissions"`
+	GrantCount  int      `json:"grantCount"`
+	OwnerName   string   `json:"ownerName"`
+	OwnerWallet string   `json:"ownerWallet,omitempty"`
+	CreatedAt   string   `json:"createdAt"`
 }
 
 func newBufferedResponse() *bufferedResponse {
@@ -615,7 +632,11 @@ func (h *ShareUserHandler) HandleListReceived(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	items, err := h.shareUserService.ListByTarget(r.Context(), u)
+	if h.sharedResourceAccess == nil {
+		http.Error(w, "Shared resource service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	items, err := h.sharedResourceAccess.ListReceivedResources(r.Context(), u.ID, time.Now())
 	if err != nil {
 		if errors.Is(err, auth.ErrAppScopeDenied) || errors.Is(err, auth.ErrAppScopeRequired) {
 			http.Error(w, "Forbidden", http.StatusForbidden)
@@ -629,9 +650,9 @@ func (h *ShareUserHandler) HandleListReceived(w http.ResponseWriter, r *http.Req
 	}
 
 	resp := struct {
-		Items []shareUserItemResp `json:"items"`
+		Items []receivedSharedResourceResp `json:"items"`
 	}{
-		Items: make([]shareUserItemResp, 0, len(items)),
+		Items: make([]receivedSharedResourceResp, 0, len(items)),
 	}
 
 	for _, item := range items {
@@ -639,7 +660,7 @@ func (h *ShareUserHandler) HandleListReceived(w http.ResponseWriter, r *http.Req
 		if owner, err := h.userRepo.FindByID(r.Context(), item.OwnerUserID); err == nil {
 			ownerWallet = owner.WalletAddress
 		}
-		resp.Items = append(resp.Items, h.buildShareUserItemResp(r.Context(), item, formatTargetWalletForViewer(item, u.WalletAddress), ownerWallet, item.OwnerUsername))
+		resp.Items = append(resp.Items, receivedSharedResourceResp{ResourceID: item.ID, Name: path.Base(item.NormalizedPath), Path: item.NormalizedPath, IsDir: item.IsDir, Permissions: permissionsToStrings(user.ParsePermissions(item.Permissions)), GrantCount: item.GrantCount, OwnerName: item.OwnerUsername, OwnerWallet: ownerWallet, CreatedAt: item.CreatedAt.Format(time.RFC3339)})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -865,6 +886,335 @@ func (h *ShareUserHandler) HandleEntries(w http.ResponseWriter, r *http.Request)
 		h.logger.Error("failed to encode response", zap.Error(err))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
+}
+
+// HandleResourceEntries is the V3 resource-ID counterpart of HandleEntries.
+func (h *ShareUserHandler) HandleResourceEntries(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	u, ok := middleware.GetUserFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	resourceID := strings.TrimSpace(r.URL.Query().Get("resourceId"))
+	if resourceID == "" {
+		http.Error(w, "resourceId is required", http.StatusBadRequest)
+		return
+	}
+	if h.sharedResourceAccess == nil {
+		http.Error(w, "Shared resource service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	resource, err := h.sharedResourceAccess.Authorize(r.Context(), resourceID, u.ID, "read", time.Now())
+	if err != nil {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	owner, err := h.userRepo.FindByID(r.Context(), resource.OwnerUserID)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+	cfg := h.shareUserService.Config()
+	if cfg == nil {
+		http.Error(w, "Server misconfigured", http.StatusInternalServerError)
+		return
+	}
+	root := filepath.Clean(filepath.Join(cfg.WebDAV.Directory, owner.Directory, filepath.FromSlash(strings.TrimPrefix(resource.NormalizedPath, "/"))))
+	rel := normalizeRelPath(r.URL.Query().Get("path"))
+	fullPath := filepath.Clean(filepath.Join(root, filepath.FromSlash(rel)))
+	if fullPath != root && !strings.HasPrefix(fullPath, root+string(os.PathSeparator)) {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "Not Found", http.StatusNotFound)
+		} else {
+			http.Error(w, "Failed to stat path", http.StatusInternalServerError)
+		}
+		return
+	}
+	type entryResp struct {
+		Name     string `json:"name"`
+		Path     string `json:"path"`
+		IsDir    bool   `json:"isDir"`
+		Size     int64  `json:"size"`
+		Modified string `json:"modified"`
+	}
+	resp := struct {
+		Items []entryResp `json:"items"`
+	}{Items: []entryResp{}}
+	if !info.IsDir() {
+		resp.Items = append(resp.Items, entryResp{Name: info.Name(), Path: "/" + info.Name(), Size: info.Size(), Modified: info.ModTime().Format(timeLayout)})
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+	entries, err := os.ReadDir(fullPath)
+	if err != nil {
+		http.Error(w, "Failed to read directory", http.StatusInternalServerError)
+		return
+	}
+	for _, entry := range entries {
+		if isIgnoredShareName(entry.Name()) {
+			continue
+		}
+		item, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		resp.Items = append(resp.Items, entryResp{Name: item.Name(), Path: buildShareEntryPath(rel, item.Name(), item.IsDir()), IsDir: item.IsDir(), Size: item.Size(), Modified: item.ModTime().Format(timeLayout)})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (h *ShareUserHandler) HandleResourceDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	u, ok := middleware.GetUserFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	resourceID := strings.TrimSpace(r.URL.Query().Get("resourceId"))
+	if resourceID == "" || h.sharedResourceAccess == nil {
+		http.Error(w, "resourceId is required", http.StatusBadRequest)
+		return
+	}
+	resource, err := h.sharedResourceAccess.Authorize(r.Context(), resourceID, u.ID, "read", time.Now())
+	if err != nil {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	owner, err := h.userRepo.FindByID(r.Context(), resource.OwnerUserID)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+	cfg := h.shareUserService.Config()
+	root := filepath.Clean(filepath.Join(cfg.WebDAV.Directory, owner.Directory, filepath.FromSlash(strings.TrimPrefix(resource.NormalizedPath, "/"))))
+	fullPath := filepath.Clean(filepath.Join(root, filepath.FromSlash(normalizeRelPath(r.URL.Query().Get("path")))))
+	if fullPath != root && !strings.HasPrefix(fullPath, root+string(os.PathSeparator)) {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil || info.IsDir() {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", info.Name()))
+	http.ServeFile(w, r, fullPath)
+}
+
+func (h *ShareUserHandler) HandleResourceCreateFolder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	u, ok := middleware.GetUserFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var input struct {
+		ResourceID string `json:"resourceId"`
+		Path       string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || strings.TrimSpace(input.ResourceID) == "" {
+		http.Error(w, "resourceId is required", http.StatusBadRequest)
+		return
+	}
+	resource, err := h.sharedResourceAccess.Authorize(r.Context(), input.ResourceID, u.ID, "create", time.Now())
+	if err != nil {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	owner, err := h.userRepo.FindByID(r.Context(), resource.OwnerUserID)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+	cfg := h.shareUserService.Config()
+	root := filepath.Clean(filepath.Join(cfg.WebDAV.Directory, owner.Directory, filepath.FromSlash(strings.TrimPrefix(resource.NormalizedPath, "/"))))
+	rel := normalizeRelPath(input.Path)
+	if rel == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+	target := filepath.Clean(filepath.Join(root, filepath.FromSlash(rel)))
+	if !strings.HasPrefix(target, root+string(os.PathSeparator)) {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	if err := os.Mkdir(target, 0755); err != nil {
+		if os.IsExist(err) {
+			http.Error(w, "Already exists", http.StatusConflict)
+		} else {
+			http.Error(w, "Failed to create directory", http.StatusInternalServerError)
+		}
+		return
+	}
+	if err := h.mutationRecorder.EnsureDir(r.Context(), target); err != nil {
+		h.logger.Error("failed to record shared resource create folder mutation", zap.Error(err))
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (h *ShareUserHandler) HandleResourceRename(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	u, ok := middleware.GetUserFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var input struct {
+		ResourceID string `json:"resourceId"`
+		FromPath   string `json:"fromPath"`
+		ToPath     string `json:"toPath"`
+	}
+	if json.NewDecoder(r.Body).Decode(&input) != nil || input.ResourceID == "" {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	resource, err := h.sharedResourceAccess.Authorize(r.Context(), input.ResourceID, u.ID, "update", time.Now())
+	if err != nil {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	owner, err := h.userRepo.FindByID(r.Context(), resource.OwnerUserID)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+	cfg := h.shareUserService.Config()
+	root := filepath.Clean(filepath.Join(cfg.WebDAV.Directory, owner.Directory, filepath.FromSlash(strings.TrimPrefix(resource.NormalizedPath, "/"))))
+	from := filepath.Clean(filepath.Join(root, filepath.FromSlash(normalizeRelPath(input.FromPath))))
+	to := filepath.Clean(filepath.Join(root, filepath.FromSlash(normalizeRelPath(input.ToPath))))
+	if from == root || to == root || !strings.HasPrefix(from, root+string(os.PathSeparator)) || !strings.HasPrefix(to, root+string(os.PathSeparator)) {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	if _, err := os.Stat(to); err == nil {
+		http.Error(w, "Already exists", http.StatusConflict)
+		return
+	}
+	info, err := os.Stat(from)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "Not Found", http.StatusNotFound)
+		} else {
+			http.Error(w, "Failed to stat source", http.StatusInternalServerError)
+		}
+		return
+	}
+	if err := os.Rename(from, to); err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "Not Found", http.StatusNotFound)
+		} else {
+			http.Error(w, "Rename failed", http.StatusInternalServerError)
+		}
+		return
+	}
+	if err := service.SyncAllSharePathsForOwnerMove(r.Context(), h.shareUserService.Repository(), h.publicShareRepo, h.shareUserService.Config(), owner, from, to); err != nil {
+		h.logger.Error("failed to sync share paths after shared resource rename", zap.Error(err))
+		http.Error(w, "Failed to update share references", http.StatusInternalServerError)
+		return
+	}
+	if err := h.sharedResourceAccess.MoveOwnerPaths(r.Context(), owner.ID, resourcePathJoin(resource.NormalizedPath, input.FromPath), resourcePathJoin(resource.NormalizedPath, input.ToPath)); err != nil {
+		h.logger.Error("failed to sync V3 resources after shared resource rename", zap.Error(err))
+		http.Error(w, "Failed to update shared resources", http.StatusInternalServerError)
+		return
+	}
+	if err := h.mutationRecorder.EnsureDir(r.Context(), filepath.Dir(to)); err != nil {
+		h.logger.Error("failed to record shared resource rename parent mutation", zap.Error(err))
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if err := h.mutationRecorder.MovePath(r.Context(), from, to, info.IsDir()); err != nil {
+		h.logger.Error("failed to record shared resource rename mutation", zap.Error(err))
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *ShareUserHandler) HandleResourceDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	u, ok := middleware.GetUserFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var input struct {
+		ResourceID string `json:"resourceId"`
+		Path       string `json:"path"`
+	}
+	if json.NewDecoder(r.Body).Decode(&input) != nil || input.ResourceID == "" {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	resource, err := h.sharedResourceAccess.Authorize(r.Context(), input.ResourceID, u.ID, "delete", time.Now())
+	if err != nil {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	owner, err := h.userRepo.FindByID(r.Context(), resource.OwnerUserID)
+	if err != nil {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+	cfg := h.shareUserService.Config()
+	root := filepath.Clean(filepath.Join(cfg.WebDAV.Directory, owner.Directory, filepath.FromSlash(strings.TrimPrefix(resource.NormalizedPath, "/"))))
+	target := filepath.Clean(filepath.Join(root, filepath.FromSlash(normalizeRelPath(input.Path))))
+	if target == root || !strings.HasPrefix(target, root+string(os.PathSeparator)) {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "Not Found", http.StatusNotFound)
+		} else {
+			http.Error(w, "Failed to stat target", http.StatusInternalServerError)
+		}
+		return
+	}
+	if err := os.RemoveAll(target); err != nil {
+		http.Error(w, "Delete failed", http.StatusInternalServerError)
+		return
+	}
+	if err := service.RemoveAllShareReferencesForOwnerPath(r.Context(), h.shareUserService.Repository(), h.publicShareRepo, h.shareUserService.Config(), owner, target); err != nil {
+		h.logger.Error("failed to remove share references after shared resource delete", zap.Error(err))
+		http.Error(w, "Failed to remove share references", http.StatusInternalServerError)
+		return
+	}
+	if err := h.sharedResourceAccess.DeleteOwnerPaths(r.Context(), owner.ID, resourcePathJoin(resource.NormalizedPath, input.Path)); err != nil {
+		h.logger.Error("failed to remove V3 resources after shared resource delete", zap.Error(err))
+		http.Error(w, "Failed to remove shared resources", http.StatusInternalServerError)
+		return
+	}
+	if err := h.mutationRecorder.RemovePath(r.Context(), target, info.IsDir()); err != nil {
+		h.logger.Error("failed to record shared resource delete mutation", zap.Error(err))
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // HandleDownload 下载分享文件
@@ -1352,6 +1702,10 @@ func normalizeRelPath(raw string) string {
 		return ""
 	}
 	return clean
+}
+
+func resourcePathJoin(root, relative string) string {
+	return path.Join("/", strings.TrimPrefix(root, "/"), normalizeRelPath(relative))
 }
 
 func buildShareEntryPath(prefix, name string, isDir bool) string {

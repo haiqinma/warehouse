@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Delete, Download, Edit, Link, MoreFilled, View } from '@element-plus/icons-vue'
-import type { DirectShareItem } from '@/api'
+import { Delete, Download, Edit, MoreFilled, View } from '@element-plus/icons-vue'
+import type { ReceivedSharedResource } from '@/api'
 import type { FileItem } from '../types'
 
 const props = defineProps<{
   isMobile: boolean
-  sharedActive: DirectShareItem | null
-  sharedWithMeList: DirectShareItem[]
+  sharedActive: ReceivedSharedResource | null
+  sharedWithMeList: ReceivedSharedResource[]
   sharedEntries: FileItem[]
   loading: boolean
   onRowClick: (...args: any[]) => void
@@ -26,19 +26,17 @@ const props = defineProps<{
   sharedCanRead: boolean
   sharedCanUpdate: boolean
   sharedCanDelete: boolean
-  openShareDetail: (mode: 'share' | 'directShare' | 'receivedShare', item: DirectShareItem) => void
-  downloadSharedRoot: (item: DirectShareItem) => void
-  shareReceivedRoot: (item: DirectShareItem) => void
+  openShareDetail: (mode: 'receivedShare', item: ReceivedSharedResource) => void
+  downloadSharedRoot: (item: ReceivedSharedResource) => void
   getPreviewMode: (item: FileItem) => 'text' | 'pdf' | 'word' | 'image' | 'audio' | 'video' | null
   openFilePreview: (item: FileItem) => void
   openSharedEntryDetail: (item: FileItem) => void
   downloadSharedFile: (item: FileItem) => void
-  shareReceivedFile: (item: FileItem) => void
   renameSharedItem: (item: FileItem) => void
   deleteSharedItem: (item: FileItem) => void
 }>()
 
-const sharedListRows = computed<DirectShareItem[]>(() => props.sharedWithMeList)
+const sharedListRows = computed<ReceivedSharedResource[]>(() => props.sharedWithMeList)
 const sharedEntryRows = computed<FileItem[]>(() => props.sharedEntries)
 const sharedRootEmptyText = '当前还没有收到任何共享'
 const sharedEntryEmptyText = '这个共享目录里还没有内容'
@@ -47,10 +45,6 @@ function handleMobileCommand(row: FileItem, command: string | number) {
   const action = String(command)
   if (action === 'preview') {
     props.openFilePreview(row)
-    return
-  }
-  if (action === 'share-link') {
-    props.shareReceivedFile(row)
     return
   }
   if (action === 'rename') {
@@ -118,9 +112,6 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
           <el-tooltip v-else-if="row.permissions && row.permissions.includes('read')" content="下载" placement="top">
             <el-button type="primary" link :icon="Download" @click="downloadSharedRoot(row)" />
           </el-tooltip>
-          <el-tooltip v-if="!row.isDir && row.permissions && row.permissions.includes('read')" content="生成下载链接" placement="top">
-            <el-button type="primary" link :icon="Link" @click="shareReceivedRoot(row)" />
-          </el-tooltip>
         </div>
       </template>
     </el-table-column>
@@ -136,7 +127,7 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
     :empty-text="sharedEntryEmptyText"
     @row-click="onRowClick"
   >
-    <el-table-column label="名称" min-width="280">
+    <el-table-column prop="name" label="名称" min-width="280" sortable :sort-method="(a: FileItem, b: FileItem) => a.name.localeCompare(b.name, 'zh-CN')">
       <template #default="{ row }">
         <div
           class="file-name"
@@ -164,7 +155,7 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
         <span class="size-cell">{{ row.isDir ? '-' : formatSize(row.size) }}</span>
       </template>
     </el-table-column>
-    <el-table-column label="修改时间" width="180">
+    <el-table-column prop="modified" label="修改时间" width="180" sortable :sort-method="(a: FileItem, b: FileItem) => new Date(a.modified).getTime() - new Date(b.modified).getTime()">
       <template #default="{ row }">
         <span class="time-cell">{{ formatTime(row.modified) }}</span>
       </template>
@@ -180,9 +171,6 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
           </el-tooltip>
           <el-tooltip v-if="!row.isDir && sharedCanRead" content="下载" placement="top">
             <el-button type="primary" link :icon="Download" @click="downloadSharedFile(row)" />
-          </el-tooltip>
-          <el-tooltip v-if="!row.isDir && sharedCanRead" content="生成下载链接" placement="top">
-            <el-button type="primary" link :icon="Link" @click="shareReceivedFile(row)" />
           </el-tooltip>
           <el-tooltip v-if="sharedCanUpdate" content="重命名" placement="top">
             <el-button type="primary" link :icon="Edit" @click="renameSharedItem(row)" />
@@ -201,7 +189,7 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
     <template v-if="!sharedActive">
       <div
         v-for="row in sharedListRows"
-        :key="row.id"
+        :key="row.resourceId"
         class="card-item"
         @click="onRowClick(row)"
       >
@@ -215,7 +203,7 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
           <div class="card-meta card-meta-compact">
             <span class="card-meta-value mono">{{ shortenAddress(row.ownerWallet) }}</span>
             <span class="card-meta-sep">·</span>
-            <span class="card-meta-value">{{ row.expiresAt ? formatTime(row.expiresAt) : '永不过期' }}</span>
+            <span class="card-meta-value">{{ row.grantCount }} 条有效授权</span>
           </div>
           <div class="card-actions card-actions-inline">
             <el-button
@@ -232,13 +220,6 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
               type="primary"
               :icon="Download"
               @click="downloadSharedRoot(row)"
-            />
-            <el-button
-              v-if="!row.isDir && row.permissions && row.permissions.includes('read')"
-              size="small"
-              circle
-              :icon="Link"
-              @click="shareReceivedRoot(row)"
             />
           </div>
         </div>
