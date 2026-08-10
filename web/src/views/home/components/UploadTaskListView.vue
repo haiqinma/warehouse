@@ -27,13 +27,6 @@ function taskProgress(task: UploadTask): number {
   return Math.min(100, Math.max(0, Math.round(raw)))
 }
 
-function taskStatusLabel(status: UploadTaskStatus): string {
-  if (status === 'queued') return '等待中'
-  if (status === 'uploading') return '上传中'
-  if (status === 'success') return '已完成'
-  return '失败'
-}
-
 function taskSpeed(task: UploadTask): string {
   if (task.status !== 'uploading' && task.status !== 'success') return '-'
   const speed = Number(task.uploadSpeed || 0)
@@ -82,7 +75,6 @@ function handleOpenTaskLocation(task: UploadTask) {
       <div class="task-main">
         <div class="task-head">
           <span class="task-title" :title="getTaskName(row)">{{ getTaskName(row) }}</span>
-          <span class="task-status" :class="`is-${row.status}`">{{ taskStatusLabel(row.status) }}</span>
         </div>
         <div class="task-meta">
           <span>{{ taskUploaded(row) }}</span>
@@ -170,30 +162,6 @@ function handleOpenTaskLocation(task: UploadTask) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.task-status {
-  flex-shrink: 0;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: #f4f6f8;
-  color: #606266;
-  font-size: 12px;
-}
-
-.task-status.is-uploading {
-  background: #ecf5ff;
-  color: #409eff;
-}
-
-.task-status.is-success {
-  background: #f0f9eb;
-  color: #67c23a;
-}
-
-.task-status.is-failed {
-  background: #fef0f0;
-  color: #f56c6c;
 }
 
 .task-meta {
