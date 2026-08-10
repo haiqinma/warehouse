@@ -1223,34 +1223,6 @@ paths:
               schema: {$ref: "#/components/schemas/PublicShare"}
         "400": {$ref: "#/components/responses/PlainTextError"}
         "403": {$ref: "#/components/responses/PlainTextError"}
-  /api/v1/public/share/create-from-received:
-    post:
-      tags: [Public shares]
-      operationId: createPublicShareFromReceived
-      summary: 为收到的共享文件创建公开链接
-      description: 仅允许仍具备读取权限的有效受众调用。派生链接的有效期不会超过原共享；原共享撤销、过期或受众资格失效后，派生链接同步失效。
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [shareId, relativePath]
-              properties:
-                shareId: {type: string, format: uuid}
-                relativePath: {type: string, description: 相对于收到的共享根目录的文件路径；原共享本身是文件时传空字符串}
-                mode: {type: string, enum: [download, preview], default: download}
-                expiresValue: {type: integer, format: int64, minimum: 0}
-                expiresUnit: {type: string, enum: [minute, hour, day, week, month, year, never]}
-      responses:
-        "200":
-          description: 分享创建成功
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/PublicShare"}
-        "400": {$ref: "#/components/responses/PlainTextError"}
-        "401": {$ref: "#/components/responses/PlainTextError"}
-        "403": {$ref: "#/components/responses/PlainTextError"}
   /api/v1/public/share/list:
     get:
       tags: [Public shares]
@@ -1351,11 +1323,71 @@ paths:
       summary: 列出分享给我的项目
       responses:
         "200":
-          description: 分享列表
+          description: 按资源聚合的有效分享列表；同一资源的多个授权仅返回一项
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/DirectedShareList"}
+              schema: {$ref: "#/components/schemas/ReceivedSharedResourceList"}
         "403": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/resource/entries:
+    get:
+      tags: [Directed shares]
+      operationId: listReceivedSharedResourceEntries
+      summary: 列出收到的 V3 共享资源内容
+      parameters:
+        - {name: resourceId, in: query, required: true, schema: {type: string}}
+        - {name: path, in: query, schema: {type: string, default: ""}}
+      responses:
+        "200": {description: 目录项列表, content: {application/json: {schema: {type: object, required: [items], properties: {items: {type: array, items: {$ref: "#/components/schemas/ShareEntry"}}}}}}}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/resource/download:
+    get:
+      tags: [Directed shares]
+      operationId: downloadReceivedSharedResourceFile
+      summary: 下载收到的 V3 共享资源文件
+      parameters:
+        - {name: resourceId, in: query, required: true, schema: {type: string}}
+        - {name: path, in: query, schema: {type: string, default: ""}}
+      responses:
+        "200": {description: 文件字节, content: {application/octet-stream: {schema: {type: string, format: binary}}}}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/resource/folder:
+    post:
+      tags: [Directed shares]
+      operationId: createReceivedSharedResourceFolder
+      summary: 在收到的 V3 共享资源中创建目录
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ResourcePathRequest"}}}}
+      responses:
+        "201": {description: 目录已创建}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "409": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/resource/rename:
+    post:
+      tags: [Directed shares]
+      operationId: renameReceivedSharedResourceItem
+      summary: 重命名收到的 V3 共享资源内容
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ResourceRenameRequest"}}}}
+      responses:
+        "204": {description: 已重命名}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
+        "409": {$ref: "#/components/responses/PlainTextError"}
+  /api/v1/public/share/resource/delete:
+    post:
+      tags: [Directed shares]
+      operationId: deleteReceivedSharedResourceItem
+      summary: 删除收到的 V3 共享资源内容
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ResourcePathRequest"}}}}
+      responses:
+        "204": {description: 已删除}
+        "400": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/PlainTextError"}
+        "404": {$ref: "#/components/responses/PlainTextError"}
   /api/v1/public/share/user/revoke:
     post:
       tags: [Directed shares]
@@ -2265,6 +2297,24 @@ components:
         items:
           type: array
           items: {$ref: "#/components/schemas/DirectedShare"}
+    ReceivedSharedResource:
+      type: object
+      required: [resourceId, name, path, isDir, permissions, grantCount, ownerName, createdAt]
+      properties:
+        resourceId: {type: string}
+        name: {type: string}
+        path: {type: string}
+        isDir: {type: boolean}
+        permissions: {type: array, items: {type: string, enum: [read, create, update, delete]}}
+        grantCount: {type: integer, minimum: 1}
+        ownerName: {type: string}
+        ownerWallet: {type: string}
+        createdAt: {type: string}
+    ReceivedSharedResourceList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/ReceivedSharedResource"}}
     ShareAudience:
       type: object
       required: [type]
@@ -2289,12 +2339,26 @@ components:
       properties:
         shareId: {type: string, format: uuid}
         path: {type: string, minLength: 1}
+    ResourcePathRequest:
+      type: object
+      required: [resourceId, path]
+      properties:
+        resourceId: {type: string, minLength: 1}
+        path: {type: string, minLength: 1}
+    ResourceRenameRequest:
+      type: object
+      required: [resourceId, fromPath, toPath]
+      properties:
+        resourceId: {type: string, minLength: 1}
+        fromPath: {type: string, minLength: 1}
+        toPath: {type: string, minLength: 1}
     CreateUploadSessionRequest:
       type: object
       required: [path, size, chunkSize, fileName]
       properties:
         path: {type: string, minLength: 1}
         shareId: {type: string, format: uuid, description: 定向分享上传时填写}
+        resourceId: {type: string, description: 收到的 V3 共享资源上传时填写；不可与 shareId 混用}
         size: {type: integer, format: int64, minimum: 0}
         chunkSize: {type: integer, format: int64, minimum: 1}
         fileName: {type: string, minLength: 1}
@@ -2317,6 +2381,7 @@ components:
         scope: {type: string}
         path: {type: string}
         shareId: {type: string, format: uuid}
+        resourceId: {type: string}
         size: {type: integer, format: int64, minimum: 0}
         chunkSize: {type: integer, format: int64, minimum: 1}
         fileName: {type: string}

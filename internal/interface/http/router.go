@@ -188,7 +188,6 @@ func (r *Router) Setup() http.Handler {
 
 	// 分享路由
 	mux.Handle("/api/v1/public/share/create", r.createAuthenticatedHandler(http.HandlerFunc(r.shareHandler.HandleCreate)))
-	mux.Handle("/api/v1/public/share/create-from-received", r.createAuthenticatedHandler(http.HandlerFunc(r.shareHandler.HandleCreateFromReceived)))
 	mux.Handle("/api/v1/public/share/list", r.createAuthenticatedHandler(http.HandlerFunc(r.shareHandler.HandleList)))
 	mux.Handle("/api/v1/public/share/revoke", r.createAuthenticatedHandler(http.HandlerFunc(r.shareHandler.HandleRevoke)))
 	mux.HandleFunc("/api/v1/public/share/", r.shareHandler.HandleAccess)
@@ -200,6 +199,11 @@ func (r *Router) Setup() http.Handler {
 	mux.Handle("/api/v1/public/share/user/revoke", r.createAuthenticatedHandler(http.HandlerFunc(r.shareUserHandler.HandleRevoke)))
 	mux.Handle("/api/v1/public/share/user/audiences", r.createAuthenticatedHandler(http.HandlerFunc(r.shareUserHandler.HandleListAudiences)))
 	mux.Handle("/api/v1/public/share/user/entries", r.createAuthenticatedHandler(http.HandlerFunc(r.shareUserHandler.HandleEntries)))
+	mux.Handle("/api/v1/public/share/resource/entries", r.createAuthenticatedHandler(http.HandlerFunc(r.shareUserHandler.HandleResourceEntries)))
+	mux.Handle("/api/v1/public/share/resource/download", r.createAuthenticatedHandler(http.HandlerFunc(r.shareUserHandler.HandleResourceDownload)))
+	mux.Handle("/api/v1/public/share/resource/folder", r.createAuthenticatedHandler(http.HandlerFunc(r.shareUserHandler.HandleResourceCreateFolder)))
+	mux.Handle("/api/v1/public/share/resource/rename", r.createAuthenticatedHandler(http.HandlerFunc(r.shareUserHandler.HandleResourceRename)))
+	mux.Handle("/api/v1/public/share/resource/delete", r.createAuthenticatedHandler(http.HandlerFunc(r.shareUserHandler.HandleResourceDelete)))
 	mux.Handle("/api/v1/public/share/user/download", r.createAuthenticatedHandler(http.HandlerFunc(r.shareUserHandler.HandleDownload)))
 	mux.Handle("/api/v1/public/share/user/upload", r.createAuthenticatedHandler(http.HandlerFunc(r.shareUserHandler.HandleUpload)))
 	mux.Handle("/api/v1/public/share/user/folder", r.createAuthenticatedHandler(http.HandlerFunc(r.shareUserHandler.HandleCreateFolder)))

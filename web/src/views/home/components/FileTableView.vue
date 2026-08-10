@@ -123,7 +123,7 @@ watch(() => props.selectionEnabled, enabled => {
     @selection-change="handleSelectionChange"
   >
     <el-table-column v-if="selectionEnabled" type="selection" width="48" />
-    <el-table-column label="名称" min-width="280">
+    <el-table-column prop="name" label="名称" min-width="280" sortable :sort-method="(a: FileItem, b: FileItem) => a.name.localeCompare(b.name, 'zh-CN')">
       <template #default="{ row }">
         <div
           class="file-name"
@@ -152,7 +152,7 @@ watch(() => props.selectionEnabled, enabled => {
         <span class="size-cell">{{ row.isDir ? '-' : formatSize(row.size) }}</span>
       </template>
     </el-table-column>
-    <el-table-column label="修改时间" width="180">
+    <el-table-column prop="modified" label="修改时间" width="180" sortable :sort-method="(a: FileItem, b: FileItem) => new Date(a.modified).getTime() - new Date(b.modified).getTime()">
       <template #default="{ row }">
         <span class="time-cell">{{ formatTime(row.modified) }}</span>
       </template>

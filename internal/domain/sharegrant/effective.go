@@ -28,6 +28,15 @@ type Resource struct {
 	IsDir          bool
 }
 
+// ReceivedResource is the single row shown for a recipient's shared resource.
+type ReceivedResource struct {
+	Resource
+	OwnerUsername string
+	GrantCount    int
+	Permissions   string
+	CreatedAt     time.Time
+}
+
 // IsEffective reports whether the grant can currently authorize any action.
 func (g Grant) IsEffective(now time.Time) bool {
 	if !strings.EqualFold(strings.TrimSpace(g.Status), StatusActive) {

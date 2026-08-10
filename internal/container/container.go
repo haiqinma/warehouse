@@ -548,6 +548,7 @@ func (c *Container) initHandlers() error {
 		c.MutationRecorder,
 		c.Logger,
 	)
+	c.ShareUserHandler.SetSharedResourceAccess(c.SharedResourceAccessService)
 	c.ShareUserHandler.SetPublicShareRepository(c.ShareRepository)
 	// 分组管理处理器
 	c.GroupHandler = handler.NewGroupHandler(

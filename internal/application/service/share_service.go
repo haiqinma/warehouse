@@ -50,51 +50,6 @@ type ShareCreateInput struct {
 	Mode   string
 }
 
-func (s *ShareService) CreateFromReceived(ctx context.Context, creator *user.User, sourceShareID, relativePath string, input ShareCreateInput) (*share.ShareItem, error) {
-	if s.shareUserService == nil {
-		return nil, fmt.Errorf("received share service is unavailable")
-	}
-	source, owner, err := s.shareUserService.ResolveForTarget(ctx, creator, sourceShareID, "read")
-	if err != nil {
-		return nil, err
-	}
-	if !user.ParsePermissions(source.Permissions).Read {
-		return nil, fmt.Errorf("permission denied: share is not readable")
-	}
-	_, fullPath, err := s.shareUserService.ResolveSharePath(owner, source, relativePath)
-	if err != nil {
-		return nil, err
-	}
-	info, err := os.Stat(fullPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat shared file: %w", err)
-	}
-	if info.IsDir() {
-		return nil, fmt.Errorf("directory sharing not supported")
-	}
-	expiresAt, err := input.Expiry.Resolve(time.Now())
-	if err != nil {
-		return nil, err
-	}
-	if source.ExpiresAt != nil && (expiresAt == nil || expiresAt.After(*source.ExpiresAt)) {
-		expiresAt = source.ExpiresAt
-	}
-	mode, err := share.NormalizeMode(input.Mode)
-	if err != nil {
-		return nil, err
-	}
-	cleanRelative := strings.TrimPrefix(path.Clean("/"+relativePath), "/")
-	resourcePath := source.Path
-	if cleanRelative != "" && cleanRelative != "." {
-		resourcePath = path.Join(source.Path, cleanRelative)
-	}
-	item := share.NewDerivedShareItem(owner.ID, owner.Username, creator.ID, source.ID, resourcePath, info.Name(), mode, expiresAt)
-	if err := s.shareRepo.Create(ctx, item); err != nil {
-		return nil, err
-	}
-	return item, nil
-}
-
 // Create 创建分享链接
 func (s *ShareService) Create(ctx context.Context, u *user.User, rawPath string, input ShareCreateInput) (*share.ShareItem, error) {
 	cleanPath, err := normalizeSharePath(rawPath, s.webdavPrefix())

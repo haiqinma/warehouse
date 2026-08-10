@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import type { ManagedGroup, DirectShareItem, GroupMember, RecycleItem, ShareExpiryUnit, ShareItem, ShareMode } from '@/api'
+import type { ManagedGroup, DirectShareItem, ReceivedSharedResource, GroupMember, RecycleItem, ShareExpiryUnit, ShareItem, ShareMode } from '@/api'
 import type { CipherSuiteOption, FileItem } from '../types'
 import type { EncryptedDirectoryPasswordSource } from '@/utils/encryptedDirectory'
 import { shortenAddress } from '@/utils/address'
@@ -13,7 +13,7 @@ const props = defineProps<{
   detailRecycle: RecycleItem | null
   detailShare: ShareItem | null
   detailDirectShare: DirectShareItem | null
-  detailReceivedShare: DirectShareItem | null
+  detailReceivedShare: ReceivedSharedResource | null
   detailSharedEntry: FileItem | null
   sharedCanRead: boolean
   sharedCanUpdate: boolean
@@ -37,9 +37,11 @@ const props = defineProps<{
   getEncryptedDirectoryProtectionLabel: (rootPath: string | null) => string
   unlockEncryptedDirectory: (rootPath: string, forceReset?: boolean) => void | Promise<void>
   clearEncryptedDirectoryPasswordCache: (rootPath: string) => void
-  enterSharedRoot: (item: DirectShareItem) => void
+  enterSharedRoot: (item: ReceivedSharedResource) => void
+  enterDirectShareRoot: (item: DirectShareItem) => void
   enterSharedDirectory: (item: FileItem) => void
-  downloadSharedRoot: (item: DirectShareItem) => void
+  downloadSharedRoot: (item: ReceivedSharedResource) => void
+  downloadDirectShareRoot: (item: DirectShareItem) => void
   downloadSharedFile: (item: FileItem) => void
   shareLinkDialogVisible: boolean
   shareLinkSubmitting: boolean
@@ -526,7 +528,7 @@ onBeforeUnmount(() => {
           v-if="detailDirectShare.isDir"
           type="primary"
           size="small"
-          @click="enterSharedRoot(detailDirectShare)"
+          @click="enterDirectShareRoot(detailDirectShare)"
         >
           进入目录
         </el-button>
@@ -534,7 +536,7 @@ onBeforeUnmount(() => {
           v-else-if="detailDirectShare.permissions && detailDirectShare.permissions.includes('read')"
           type="primary"
           size="small"
-          @click="downloadSharedRoot(detailDirectShare)"
+          @click="downloadDirectShareRoot(detailDirectShare)"
         >
           下载
         </el-button>
@@ -572,12 +574,8 @@ onBeforeUnmount(() => {
           <span class="detail-value mono">{{ detailReceivedShare.ownerWallet || '-' }}</span>
         </div>
         <div class="detail-row">
-          <span class="detail-label">{{ formatTargetAudienceLabel(detailReceivedShare) }}</span>
-          <span class="detail-value" :class="{ mono: isTargetAudienceMono(detailReceivedShare) }">{{ formatTargetAudience(detailReceivedShare) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="detail-label">目标范围</span>
-          <span class="detail-value">{{ formatTargetScope(detailReceivedShare) }}</span>
+          <span class="detail-label">有效授权</span>
+          <span class="detail-value">{{ detailReceivedShare.grantCount }} 条</span>
         </div>
         <div class="detail-row">
           <span class="detail-label">权限</span>
@@ -589,10 +587,6 @@ onBeforeUnmount(() => {
               </el-tag>
             </span>
           </span>
-        </div>
-        <div class="detail-row">
-          <span class="detail-label">过期时间</span>
-          <span class="detail-value time-cell">{{ detailReceivedShare.expiresAt ? formatTime(detailReceivedShare.expiresAt) : '永不过期' }}</span>
         </div>
         <div class="detail-row">
           <span class="detail-label">创建时间</span>

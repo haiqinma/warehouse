@@ -1044,26 +1044,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/public/share/create-from-received": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * 为收到的共享文件创建公开链接
-         * @description 仅允许仍具备读取权限的有效受众调用。派生链接的有效期不会超过原共享；原共享撤销、过期或受众资格失效后，派生链接同步失效。
-         */
-        post: operations["createPublicShareFromReceived"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/public/share/list": {
         parameters: {
             query?: never;
@@ -1164,6 +1144,91 @@ export interface paths {
         get: operations["listReceivedDirectedShares"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/share/resource/entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 列出收到的 V3 共享资源内容 */
+        get: operations["listReceivedSharedResourceEntries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/share/resource/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 下载收到的 V3 共享资源文件 */
+        get: operations["downloadReceivedSharedResourceFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/share/resource/folder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 在收到的 V3 共享资源中创建目录 */
+        post: operations["createReceivedSharedResourceFolder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/share/resource/rename": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 重命名收到的 V3 共享资源内容 */
+        post: operations["renameReceivedSharedResourceItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/share/resource/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 删除收到的 V3 共享资源内容 */
+        post: operations["deleteReceivedSharedResourceItem"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1820,6 +1885,20 @@ export interface components {
         DirectedShareList: {
             items: components["schemas"]["DirectedShare"][];
         };
+        ReceivedSharedResource: {
+            resourceId: string;
+            name: string;
+            path: string;
+            isDir: boolean;
+            permissions: ("read" | "create" | "update" | "delete")[];
+            grantCount: number;
+            ownerName: string;
+            ownerWallet?: string;
+            createdAt: string;
+        };
+        ReceivedSharedResourceList: {
+            items: components["schemas"]["ReceivedSharedResource"][];
+        };
         ShareAudience: {
             type: string;
             /** Format: uuid */
@@ -1842,6 +1921,15 @@ export interface components {
             shareId: string;
             path: string;
         };
+        ResourcePathRequest: {
+            resourceId: string;
+            path: string;
+        };
+        ResourceRenameRequest: {
+            resourceId: string;
+            fromPath: string;
+            toPath: string;
+        };
         CreateUploadSessionRequest: {
             path: string;
             /**
@@ -1849,6 +1937,8 @@ export interface components {
              * @description 定向分享上传时填写
              */
             shareId?: string;
+            /** @description 收到的 V3 共享资源上传时填写；不可与 shareId 混用 */
+            resourceId?: string;
             /** Format: int64 */
             size: number;
             /** Format: int64 */
@@ -1874,6 +1964,7 @@ export interface components {
             path: string;
             /** Format: uuid */
             shareId?: string;
+            resourceId?: string;
             /** Format: int64 */
             size: number;
             /** Format: int64 */
@@ -3536,47 +3627,6 @@ export interface operations {
             403: components["responses"]["PlainTextError"];
         };
     };
-    createPublicShareFromReceived: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** Format: uuid */
-                    shareId: string;
-                    /** @description 相对于收到的共享根目录的文件路径；原共享本身是文件时传空字符串 */
-                    relativePath: string;
-                    /**
-                     * @default download
-                     * @enum {string}
-                     */
-                    mode?: "download" | "preview";
-                    /** Format: int64 */
-                    expiresValue?: number;
-                    /** @enum {string} */
-                    expiresUnit?: "minute" | "hour" | "day" | "week" | "month" | "year" | "never";
-                };
-            };
-        };
-        responses: {
-            /** @description 分享创建成功 */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PublicShare"];
-                };
-            };
-            400: components["responses"]["PlainTextError"];
-            401: components["responses"]["PlainTextError"];
-            403: components["responses"]["PlainTextError"];
-        };
-    };
     listPublicShares: {
         parameters: {
             query?: never;
@@ -3724,16 +3774,146 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description 分享列表 */
+            /** @description 按资源聚合的有效分享列表；同一资源的多个授权仅返回一项 */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DirectedShareList"];
+                    "application/json": components["schemas"]["ReceivedSharedResourceList"];
                 };
             };
             403: components["responses"]["PlainTextError"];
+        };
+    };
+    listReceivedSharedResourceEntries: {
+        parameters: {
+            query: {
+                resourceId: string;
+                path?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 目录项列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ShareEntry"][];
+                    };
+                };
+            };
+            400: components["responses"]["PlainTextError"];
+            403: components["responses"]["PlainTextError"];
+            404: components["responses"]["PlainTextError"];
+        };
+    };
+    downloadReceivedSharedResourceFile: {
+        parameters: {
+            query: {
+                resourceId: string;
+                path?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 文件字节 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            400: components["responses"]["PlainTextError"];
+            403: components["responses"]["PlainTextError"];
+            404: components["responses"]["PlainTextError"];
+        };
+    };
+    createReceivedSharedResourceFolder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourcePathRequest"];
+            };
+        };
+        responses: {
+            /** @description 目录已创建 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["PlainTextError"];
+            403: components["responses"]["PlainTextError"];
+            409: components["responses"]["PlainTextError"];
+        };
+    };
+    renameReceivedSharedResourceItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceRenameRequest"];
+            };
+        };
+        responses: {
+            /** @description 已重命名 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["PlainTextError"];
+            403: components["responses"]["PlainTextError"];
+            404: components["responses"]["PlainTextError"];
+            409: components["responses"]["PlainTextError"];
+        };
+    };
+    deleteReceivedSharedResourceItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourcePathRequest"];
+            };
+        };
+        responses: {
+            /** @description 已删除 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["PlainTextError"];
+            403: components["responses"]["PlainTextError"];
+            404: components["responses"]["PlainTextError"];
         };
     };
     revokeDirectedShare: {

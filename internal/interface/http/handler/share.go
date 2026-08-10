@@ -101,52 +101,6 @@ func (h *ShareHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// HandleCreateFromReceived creates a public link derived from a readable received share.
-func (h *ShareHandler) HandleCreateFromReceived(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	u, ok := middleware.GetUserFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-	var req struct {
-		ShareID      string `json:"shareId"`
-		RelativePath string `json:"relativePath"`
-		Mode         string `json:"mode"`
-		ExpiresValue int64  `json:"expiresValue"`
-		ExpiresUnit  string `json:"expiresUnit"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-	if strings.TrimSpace(req.ShareID) == "" {
-		http.Error(w, "shareId is required", http.StatusBadRequest)
-		return
-	}
-	item, err := h.shareService.CreateFromReceived(r.Context(), u, req.ShareID, req.RelativePath, service.ShareCreateInput{
-		Mode:   req.Mode,
-		Expiry: service.ShareExpiryInput{ExpiresValue: req.ExpiresValue, ExpiresUnit: req.ExpiresUnit},
-	})
-	if err != nil {
-		h.logger.Warn("failed to create public link from received share", zap.String("share_id", req.ShareID), zap.Error(err))
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	resp := map[string]any{
-		"token": item.Token, "name": item.Name, "path": item.Path, "mode": item.Mode,
-		"url": h.buildShareURL(r, item.Token, item.Name), "viewCount": item.ViewCount, "downloadCount": item.DownloadCount,
-	}
-	if item.ExpiresAt != nil {
-		resp["expiresAt"] = item.ExpiresAt.Format(timeLayout)
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
-}
-
 // HandleList 获取分享列表
 func (h *ShareHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

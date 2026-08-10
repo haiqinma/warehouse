@@ -24,6 +24,7 @@ type uploadSessionResponse struct {
 	Scope        string                      `json:"scope"`
 	Path         string                      `json:"path"`
 	ShareID      string                      `json:"shareId,omitempty"`
+	ResourceID   string                      `json:"resourceId,omitempty"`
 	Size         int64                       `json:"size"`
 	ChunkSize    int64                       `json:"chunkSize"`
 	FileName     string                      `json:"fileName"`
@@ -53,6 +54,7 @@ func (h *UploadSessionHandler) HandleCreate(w http.ResponseWriter, r *http.Reque
 	var req struct {
 		Path         string `json:"path"`
 		ShareID      string `json:"shareId"`
+		ResourceID   string `json:"resourceId"`
 		Size         int64  `json:"size"`
 		ChunkSize    int64  `json:"chunkSize"`
 		FileName     string `json:"fileName"`
@@ -66,6 +68,7 @@ func (h *UploadSessionHandler) HandleCreate(w http.ResponseWriter, r *http.Reque
 	session, err := h.service.Create(r.Context(), u, service.UploadSessionCreateInput{
 		Path:         req.Path,
 		ShareID:      req.ShareID,
+		ResourceID:   req.ResourceID,
 		Size:         req.Size,
 		ChunkSize:    req.ChunkSize,
 		FileName:     req.FileName,
@@ -180,6 +183,7 @@ func buildUploadSessionResponse(session *service.UploadSession) uploadSessionRes
 		Scope:        session.Scope,
 		Path:         session.TargetPath,
 		ShareID:      session.ShareID,
+		ResourceID:   session.ResourceID,
 		Size:         session.Size,
 		ChunkSize:    session.ChunkSize,
 		FileName:     session.FileName,

@@ -53,6 +53,7 @@ const (
 type UploadSessionCreateInput struct {
 	Path         string
 	ShareID      string
+	ResourceID   string
 	Size         int64
 	ChunkSize    int64
 	FileName     string
@@ -77,6 +78,7 @@ type UploadSession struct {
 	TargetPath     string                    `json:"targetPath"`
 	TargetFullPath string                    `json:"targetFullPath"`
 	ShareID        string                    `json:"shareId,omitempty"`
+	ResourceID     string                    `json:"resourceId,omitempty"`
 	Size           int64                     `json:"size"`
 	ChunkSize      int64                     `json:"chunkSize"`
 	FileName       string                    `json:"fileName"`
@@ -450,11 +452,12 @@ func (s *UploadSessionService) authorizeSession(ctx context.Context, uploader *u
 		return nil, ErrUploadSessionForbidden
 	}
 	input := UploadSessionCreateInput{
-		Path:      session.TargetPath,
-		ShareID:   session.ShareID,
-		Size:      session.Size,
-		ChunkSize: session.ChunkSize,
-		FileName:  session.FileName,
+		Path:       session.TargetPath,
+		ShareID:    session.ShareID,
+		ResourceID: session.ResourceID,
+		Size:       session.Size,
+		ChunkSize:  session.ChunkSize,
+		FileName:   session.FileName,
 	}
 	target, _, err := s.resolveTarget(ctx, uploader, input)
 	if err != nil {
@@ -466,12 +469,49 @@ func (s *UploadSessionService) authorizeSession(ctx context.Context, uploader *u
 }
 
 func (s *UploadSessionService) resolveTarget(ctx context.Context, uploader *user.User, input UploadSessionCreateInput) (*UploadSessionTarget, string, error) {
+	if strings.TrimSpace(input.ResourceID) != "" {
+		target, err := s.resolveSharedResourceTarget(ctx, uploader, input)
+		return target, UploadSessionScopeShare, err
+	}
 	if strings.TrimSpace(input.ShareID) != "" {
 		target, err := s.resolveShareTarget(ctx, uploader, input)
 		return target, UploadSessionScopeShare, err
 	}
 	target, err := s.resolveWebDAVTarget(ctx, uploader, input.Path)
 	return target, UploadSessionScopeWebDAV, err
+}
+
+func (s *UploadSessionService) resolveSharedResourceTarget(ctx context.Context, uploader *user.User, input UploadSessionCreateInput) (*UploadSessionTarget, error) {
+	if s.sharedResourceAccess == nil || s.userRepo == nil {
+		return nil, ErrUploadSessionForbidden
+	}
+	resource, err := s.sharedResourceAccess.Authorize(ctx, strings.TrimSpace(input.ResourceID), uploader.ID, "create", time.Now())
+	if err != nil {
+		return nil, ErrUploadSessionForbidden
+	}
+	owner, err := s.userRepo.FindByID(ctx, resource.OwnerUserID)
+	if err != nil {
+		return nil, err
+	}
+	targetPath, err := normalizeUploadTargetPath(input.Path)
+	if err != nil {
+		return nil, err
+	}
+	fullPath := filepath.Clean(filepath.Join(s.config.WebDAV.Directory, owner.Directory, filepath.FromSlash(strings.TrimPrefix(resource.NormalizedPath, "/")), filepath.FromSlash(strings.TrimPrefix(targetPath, "/"))))
+	root := filepath.Clean(filepath.Join(s.config.WebDAV.Directory, owner.Directory, filepath.FromSlash(strings.TrimPrefix(resource.NormalizedPath, "/"))))
+	if fullPath != root && !isPathWithin(root, fullPath) {
+		return nil, ErrUploadSessionInvalid
+	}
+	op := permission.OperationCreate
+	if _, err := os.Stat(fullPath); err == nil {
+		op = permission.OperationWrite
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	if _, err := s.sharedResourceAccess.Authorize(ctx, strings.TrimSpace(input.ResourceID), uploader.ID, permission.MapOperationToPermission(op), time.Now()); err != nil {
+		return nil, ErrUploadSessionForbidden
+	}
+	return &UploadSessionTarget{Owner: owner, FullPath: fullPath, TargetPath: targetPath, Operation: op}, nil
 }
 
 func (s *UploadSessionService) resolveWebDAVTarget(ctx context.Context, uploader *user.User, rawPath string) (*UploadSessionTarget, error) {
