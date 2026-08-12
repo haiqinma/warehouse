@@ -14,6 +14,7 @@ CONFIG="${HEALTH_CONFIG:-}"
 BASE_URL="${HEALTH_BASE_URL:-}"
 PID_FILE="${WAREHOUSE_HEALTH_PID_FILE:-${PROJECT_DIR}/run/warehouse.pid}"
 QUIET=0
+LOGFILE=""
 
 CHECK_NAMES=()
 CHECK_STATUSES=()
@@ -24,6 +25,43 @@ WARNED=0
 FAILED=0
 SKIPPED=0
 TIMED_OUT=0
+
+init_log_file() {
+  local logfile_name=$1
+  local logfile_dir="/opt/logs"
+  local logfile_path="${logfile_dir}/${logfile_name}"
+
+  if ! mkdir -p "${logfile_dir}" 2>/dev/null || ! touch "${logfile_path}" 2>/dev/null; then
+    printf 'health-check: failed to initialize log file: %s\n' "${logfile_path}" >&2
+    LOGFILE=""
+    return 0
+  fi
+
+  LOGFILE="${logfile_path}"
+
+  local filesize=0
+  filesize=$(stat -c "%s" "${LOGFILE}" 2>/dev/null || echo 0)
+  if [[ "${filesize}" -ge 1048576 ]]; then
+    printf 'clear old logs at %s to avoid log file too big\n' "$(date)" >"${LOGFILE}"
+  fi
+}
+
+log() {
+  [[ -n "${LOGFILE}" ]] || return 0
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"${LOGFILE}"
+}
+
+log_err() {
+  local message
+  message="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+  if [[ -n "${LOGFILE}" ]]; then
+    printf '%s\n' "${message}" | tee -a "${LOGFILE}" >&2
+  else
+    printf '%s\n' "${message}" >&2
+  fi
+}
+
+init_log_file "health-check-warehouse.log"
 
 usage() {
   cat <<'EOF'
@@ -50,8 +88,8 @@ EOF
 }
 
 usage_error() {
-  echo "health-check: $1" >&2
-  echo "Try --help for usage." >&2
+  log_err "health-check: $1"
+  log_err "Try --help for usage."
   exit 2
 }
 
@@ -133,7 +171,7 @@ if [[ ! "${INTERVAL}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
 fi
 
 if ! command -v curl >/dev/null 2>&1; then
-  echo "health-check: required command not found: curl" >&2
+  log_err "health-check: required command not found: curl"
   exit 3
 fi
 
@@ -183,6 +221,7 @@ if [[ -z "${BASE_URL}" ]]; then
   BASE_URL="${SCHEME}://${SERVER_ADDRESS}:${SERVER_PORT}"
 fi
 BASE_URL="${BASE_URL%/}"
+log "start health check: level=${LEVEL} timeout=${TIMEOUT}s retries=${RETRIES} interval=${INTERVAL}s format=${FORMAT} base_url=${BASE_URL} pid_file=${PID_FILE}"
 
 now_ms() {
   if command -v python3 >/dev/null 2>&1; then
@@ -224,6 +263,7 @@ record_check() {
     fail) FAILED=$((FAILED + 1)) ;;
     skip) SKIPPED=$((SKIPPED + 1)) ;;
   esac
+  log "check ${name}: status=${status} duration_ms=${duration} message=${message}"
 }
 
 check_process() {
@@ -272,7 +312,7 @@ run_http_check() {
   local check_start check_end duration body_file http_code curl_rc message
   check_start="$(now_ms)"
   body_file="$(mktemp "${TMPDIR:-/tmp}/warehouse-health.XXXXXX")" || {
-    echo "health-check: failed to create temporary file" >&2
+    log_err "health-check: failed to create temporary file"
     exit 3
   }
 
@@ -414,9 +454,12 @@ else
 fi
 
 if (( FAILED == 0 )); then
+  log "finish health check: status=${RESULT_STATUS} exit_code=0 passed=${PASSED} warned=${WARNED} failed=${FAILED} skipped=${SKIPPED} duration_ms=${DURATION_MS}"
   exit 0
 fi
 if (( TIMED_OUT == 1 )); then
+  log "finish health check: status=${RESULT_STATUS} exit_code=4 passed=${PASSED} warned=${WARNED} failed=${FAILED} skipped=${SKIPPED} duration_ms=${DURATION_MS}"
   exit 4
 fi
+log "finish health check: status=${RESULT_STATUS} exit_code=1 passed=${PASSED} warned=${WARNED} failed=${FAILED} skipped=${SKIPPED} duration_ms=${DURATION_MS}"
 exit 1
