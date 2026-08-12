@@ -81,6 +81,10 @@ func (h *ShareHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.writeShareCreateResponse(w, r, item)
+}
+
+func (h *ShareHandler) writeShareCreateResponse(w http.ResponseWriter, r *http.Request, item *share.ShareItem) {
 	resp := map[string]any{
 		"token":         item.Token,
 		"name":          item.Name,
@@ -99,6 +103,35 @@ func (h *ShareHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("failed to encode response", zap.Error(err))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
+}
+
+func (h *ShareHandler) HandleCreateFromReceivedResource(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	u, ok := middleware.GetUserFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		ResourceID   string `json:"resourceId"`
+		RelativePath string `json:"relativePath"`
+		Mode         string `json:"mode"`
+		ExpiresValue int64  `json:"expiresValue"`
+		ExpiresUnit  string `json:"expiresUnit"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.ResourceID) == "" {
+		http.Error(w, "resourceId is required", http.StatusBadRequest)
+		return
+	}
+	item, err := h.shareService.CreateFromReceivedResource(r.Context(), u, req.ResourceID, req.RelativePath, service.ShareCreateInput{Mode: req.Mode, Expiry: service.ShareExpiryInput{ExpiresValue: req.ExpiresValue, ExpiresUnit: req.ExpiresUnit}})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.writeShareCreateResponse(w, r, item)
 }
 
 // HandleList 获取分享列表

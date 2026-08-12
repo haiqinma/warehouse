@@ -188,6 +188,7 @@ func (r *Router) Setup() http.Handler {
 
 	// 分享路由
 	mux.Handle("/api/v1/public/share/create", r.createAuthenticatedHandler(http.HandlerFunc(r.shareHandler.HandleCreate)))
+	mux.Handle("/api/v1/public/share/create-from-resource", r.createAuthenticatedHandler(http.HandlerFunc(r.shareHandler.HandleCreateFromReceivedResource)))
 	mux.Handle("/api/v1/public/share/list", r.createAuthenticatedHandler(http.HandlerFunc(r.shareHandler.HandleList)))
 	mux.Handle("/api/v1/public/share/revoke", r.createAuthenticatedHandler(http.HandlerFunc(r.shareHandler.HandleRevoke)))
 	mux.HandleFunc("/api/v1/public/share/", r.shareHandler.HandleAccess)

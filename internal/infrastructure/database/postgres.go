@@ -419,6 +419,7 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 		`UPDATE share_items SET creator_user_id = user_id WHERE creator_user_id IS NULL`,
 		`ALTER TABLE share_items ALTER COLUMN creator_user_id SET NOT NULL`,
 		`ALTER TABLE share_items ADD COLUMN IF NOT EXISTS source_share_id VARCHAR(50) NULL`,
+		`ALTER TABLE share_items ADD COLUMN IF NOT EXISTS source_resource_id VARCHAR(50) NULL`,
 		`ALTER TABLE internal_share_items ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'`,
 		`ALTER TABLE internal_share_audiences ADD COLUMN IF NOT EXISTS grant_id VARCHAR(50) NULL REFERENCES internal_share_grants(id) ON DELETE CASCADE`,
 		`ALTER TABLE recycle_items ADD COLUMN IF NOT EXISTS is_dir BOOLEAN NOT NULL DEFAULT FALSE`,

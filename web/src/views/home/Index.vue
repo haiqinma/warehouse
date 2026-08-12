@@ -136,6 +136,7 @@ const movingSharedByDrag = ref(false)
 const shareLinkDialogVisible = ref(false)
 const shareLinkSubmitting = ref(false)
 const shareLinkTarget = ref<FileItem | null>(null)
+const shareLinkResourceContext = ref<{ resourceId: string; relativePath: string } | null>(null)
 const shareLinkForm = ref(createDefaultShareLinkForm())
 const shareUserDialogVisible = ref(false)
 const shareUserSubmitting = ref(false)
@@ -3033,8 +3034,28 @@ async function shareFile(item: FileItem) {
     return
   }
   shareLinkTarget.value = item
+  shareLinkResourceContext.value = null
   shareLinkForm.value = createDefaultShareLinkForm()
   shareLinkDialogVisible.value = true
+}
+
+function shareReceivedFile(item: FileItem) {
+  if (!sharedActive.value || item.isDir || !sharedCanRead.value) return
+  shareLinkTarget.value = item
+  shareLinkResourceContext.value = {
+    resourceId: sharedActive.value.resourceId,
+    relativePath: normalizeShareRelative(item.path)
+  }
+  shareLinkForm.value = createDefaultShareLinkForm()
+  shareLinkDialogVisible.value = true
+}
+
+function shareReceivedRoot(item: ReceivedSharedResource) {
+	if (item.isDir || !item.permissions.includes('read')) return
+	shareLinkTarget.value = { name: item.name, path: item.path, isDir: false, size: 0, modified: item.createdAt }
+	shareLinkResourceContext.value = { resourceId: item.resourceId, relativePath: '' }
+	shareLinkForm.value = createDefaultShareLinkForm()
+	shareLinkDialogVisible.value = true
 }
 
 async function submitShareLink() {
@@ -3044,13 +3065,13 @@ async function submitShareLink() {
 
   shareLinkSubmitting.value = true
   try {
-    const data = await shareApi.create(shareLinkTarget.value.path, {
-      ...expiryPayload,
-      mode: shareLinkForm.value.mode
-    })
+    const data = shareLinkResourceContext.value
+      ? await shareApi.createFromReceivedResource({ ...shareLinkResourceContext.value, ...expiryPayload, mode: shareLinkForm.value.mode })
+      : await shareApi.create(shareLinkTarget.value.path, { ...expiryPayload, mode: shareLinkForm.value.mode })
     const url = data.url || `${window.location.origin}/api/v1/public/share/${data.token}`
     await copyText(url, '分享链接已复制')
     shareLinkDialogVisible.value = false
+    shareLinkResourceContext.value = null
   } catch (error: any) {
     console.error('创建分享失败:', error)
     showError(error?.message || '创建分享失败')
@@ -4757,6 +4778,14 @@ function enterSharedWithMeList() {
   fetchSharedWithMe()
 }
 
+// Side navigation must restore the last received-resource context rather than
+// discarding it. Search text is scoped to this view, so keeping the resource
+// and path together prevents a stale keyword being applied to the root.
+async function returnToSharedWithMe() {
+  if (showSharedWithMe.value && sharedActive.value) return
+  await restoreSharedWithMeView()
+}
+
 // 取消分享
 async function revokeShare(item: ShareItem) {
   if (!(await confirmAction(`确定取消分享 ${item.name} 吗？`, '取消分享'))) return
@@ -5590,7 +5619,7 @@ function handleExternalNavigate(event: Event) {
     return
   }
   if (view === 'sharedWithMe') {
-    enterSharedWithMeList()
+    void returnToSharedWithMe()
     return
   }
   if (view === 'group') {
@@ -5896,7 +5925,7 @@ onBeforeUnmount(() => {
                   type="button"
                   class="nav-item"
                   :class="{ active: showSharedWithMe }"
-                  @click="enterSharedWithMeList"
+                  @click="returnToSharedWithMe"
                 >
                   <el-icon class="nav-icon"><DocumentCopy /></el-icon>
                   <span v-show="!sidePanelCollapsed">收到的分享</span>
@@ -6802,10 +6831,12 @@ onBeforeUnmount(() => {
               :shared-can-delete="sharedCanDelete"
               :open-share-detail="openShareDetail"
               :download-shared-root="downloadSharedRoot"
+              :share-received-root="shareReceivedRoot"
               :get-preview-mode="getPreviewMode"
               :open-file-preview="openFilePreview"
               :open-shared-entry-detail="openSharedEntryDetail"
               :download-shared-file="downloadSharedFile"
+              :share-received-file="shareReceivedFile"
               :rename-shared-item="renameSharedItem"
               :delete-shared-item="deleteSharedItem"
             />

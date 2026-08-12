@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Delete, Download, Edit, MoreFilled, View } from '@element-plus/icons-vue'
+import { Delete, Download, Edit, Link, MoreFilled, View } from '@element-plus/icons-vue'
 import type { ReceivedSharedResource } from '@/api'
 import type { FileItem } from '../types'
 
@@ -28,10 +28,12 @@ const props = defineProps<{
   sharedCanDelete: boolean
   openShareDetail: (mode: 'receivedShare', item: ReceivedSharedResource) => void
   downloadSharedRoot: (item: ReceivedSharedResource) => void
+  shareReceivedRoot: (item: ReceivedSharedResource) => void
   getPreviewMode: (item: FileItem) => 'text' | 'pdf' | 'word' | 'image' | 'audio' | 'video' | null
   openFilePreview: (item: FileItem) => void
   openSharedEntryDetail: (item: FileItem) => void
   downloadSharedFile: (item: FileItem) => void
+  shareReceivedFile: (item: FileItem) => void
   renameSharedItem: (item: FileItem) => void
   deleteSharedItem: (item: FileItem) => void
 }>()
@@ -45,6 +47,10 @@ function handleMobileCommand(row: FileItem, command: string | number) {
   const action = String(command)
   if (action === 'preview') {
     props.openFilePreview(row)
+    return
+  }
+  if (action === 'share-link') {
+    props.shareReceivedFile(row)
     return
   }
   if (action === 'rename') {
@@ -112,6 +118,9 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
           <el-tooltip v-else-if="row.permissions && row.permissions.includes('read')" content="下载" placement="top">
             <el-button type="primary" link :icon="Download" @click="downloadSharedRoot(row)" />
           </el-tooltip>
+          <el-tooltip v-if="!row.isDir && row.permissions && row.permissions.includes('read')" content="生成下载链接" placement="top">
+            <el-button type="primary" link :icon="Link" @click="shareReceivedRoot(row)" />
+          </el-tooltip>
         </div>
       </template>
     </el-table-column>
@@ -172,6 +181,9 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
           <el-tooltip v-if="!row.isDir && sharedCanRead" content="下载" placement="top">
             <el-button type="primary" link :icon="Download" @click="downloadSharedFile(row)" />
           </el-tooltip>
+          <el-tooltip v-if="!row.isDir && sharedCanRead" content="生成下载链接" placement="top">
+            <el-button type="primary" link :icon="Link" @click="shareReceivedFile(row)" />
+          </el-tooltip>
           <el-tooltip v-if="sharedCanUpdate" content="重命名" placement="top">
             <el-button type="primary" link :icon="Edit" @click="renameSharedItem(row)" />
           </el-tooltip>
@@ -220,6 +232,13 @@ function getSharedEntryRowClassName({ row }: { row: FileItem }) {
               type="primary"
               :icon="Download"
               @click="downloadSharedRoot(row)"
+            />
+            <el-button
+              v-if="!row.isDir && row.permissions && row.permissions.includes('read')"
+              size="small"
+              circle
+              :icon="Link"
+              @click="shareReceivedRoot(row)"
             />
           </div>
         </div>

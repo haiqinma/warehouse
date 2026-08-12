@@ -19,15 +19,20 @@ import (
 
 // ShareService 文件分享服务
 type ShareService struct {
-	shareRepo        repository.ShareRepository
-	userRepo         user.Repository
-	config           *config.Config
-	logger           *zap.Logger
-	shareUserService *ShareUserService
+	shareRepo            repository.ShareRepository
+	userRepo             user.Repository
+	config               *config.Config
+	logger               *zap.Logger
+	shareUserService     *ShareUserService
+	sharedResourceAccess *SharedResourceAccessService
 }
 
 func (s *ShareService) SetShareUserService(service *ShareUserService) {
 	s.shareUserService = service
+}
+
+func (s *ShareService) SetSharedResourceAccess(access *SharedResourceAccessService) {
+	s.sharedResourceAccess = access
 }
 
 // NewShareService 创建分享服务
@@ -48,6 +53,49 @@ func NewShareService(
 type ShareCreateInput struct {
 	Expiry ShareExpiryInput
 	Mode   string
+}
+
+// CreateFromReceivedResource creates a public file link only while the
+// recipient retains effective read access to the V3 resource. The access is
+// rechecked whenever the public link is resolved.
+func (s *ShareService) CreateFromReceivedResource(ctx context.Context, creator *user.User, resourceID, relativePath string, input ShareCreateInput) (*share.ShareItem, error) {
+	if s.sharedResourceAccess == nil {
+		return nil, fmt.Errorf("shared resource access service is unavailable")
+	}
+	resource, err := s.sharedResourceAccess.Authorize(ctx, resourceID, creator.ID, "read", time.Now())
+	if err != nil {
+		return nil, err
+	}
+	owner, err := s.userRepo.FindByID(ctx, resource.OwnerUserID)
+	if err != nil {
+		return nil, err
+	}
+	cleanRelative := ""
+	if strings.TrimSpace(relativePath) != "" {
+		cleanRelative, err = normalizeSharePath(relativePath, "")
+		if err != nil {
+			return nil, err
+		}
+	}
+	resourcePath := path.Join("/", strings.TrimPrefix(resource.NormalizedPath, "/"), strings.TrimPrefix(cleanRelative, "/"))
+	fullPath := s.resolveFullPath(owner, resourcePath)
+	info, err := os.Stat(fullPath)
+	if err != nil || info.IsDir() {
+		return nil, fmt.Errorf("shared file not found")
+	}
+	expiresAt, err := input.Expiry.Resolve(time.Now())
+	if err != nil {
+		return nil, err
+	}
+	mode, err := share.NormalizeMode(input.Mode)
+	if err != nil {
+		return nil, err
+	}
+	item := share.NewResourceDerivedShareItem(owner.ID, owner.Username, creator.ID, resource.ID, resourcePath, info.Name(), mode, expiresAt)
+	if err := s.shareRepo.Create(ctx, item); err != nil {
+		return nil, err
+	}
+	return item, nil
 }
 
 // Create 创建分享链接
@@ -186,6 +234,18 @@ func (s *ShareService) Resolve(ctx context.Context, token string) (*share.ShareI
 		}
 		source, _, err := s.shareUserService.ResolveForTarget(ctx, creator, item.SourceShareID, "read")
 		if err != nil || !user.ParsePermissions(source.Permissions).Read {
+			return nil, nil, nil, share.ErrInvalidShare
+		}
+	}
+	if item.SourceResourceID != "" {
+		if s.sharedResourceAccess == nil {
+			return nil, nil, nil, share.ErrInvalidShare
+		}
+		creator, err := s.userRepo.FindByID(ctx, item.CreatorUserID)
+		if err != nil {
+			return nil, nil, nil, share.ErrInvalidShare
+		}
+		if _, err := s.sharedResourceAccess.Authorize(ctx, item.SourceResourceID, creator.ID, "read", time.Now()); err != nil {
 			return nil, nil, nil, share.ErrInvalidShare
 		}
 	}
