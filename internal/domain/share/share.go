@@ -21,19 +21,27 @@ const (
 
 // ShareItem 文件分享实体
 type ShareItem struct {
-	ID            string
-	Token         string
-	UserID        string
-	CreatorUserID string
-	SourceShareID string
-	Username      string
-	Name          string
-	Path          string
-	Mode          string
-	ExpiresAt     *time.Time
-	ViewCount     int64
-	DownloadCount int64
-	CreatedAt     time.Time
+	ID               string
+	Token            string
+	UserID           string
+	CreatorUserID    string
+	SourceShareID    string
+	SourceResourceID string
+	Username         string
+	Name             string
+	Path             string
+	Mode             string
+	ExpiresAt        *time.Time
+	ViewCount        int64
+	DownloadCount    int64
+	CreatedAt        time.Time
+}
+
+func NewResourceDerivedShareItem(ownerUserID, ownerUsername, creatorUserID, sourceResourceID, path, name, mode string, expiresAt *time.Time) *ShareItem {
+	item := NewShareItem(ownerUserID, ownerUsername, path, name, mode, expiresAt)
+	item.CreatorUserID = creatorUserID
+	item.SourceResourceID = sourceResourceID
+	return item
 }
 
 // NewShareItem 创建分享记录

@@ -1044,6 +1044,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/share/create-from-resource": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 为收到的 V3 共享资源文件创建公开链接
+         * @description 创建和每次访问均重新校验创建者对 resourceId 的有效 read grant；授权撤销、过期或动态分组资格失效后，链接立即失效。
+         */
+        post: operations["createPublicShareFromReceivedResource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/share/list": {
         parameters: {
             query?: never;
@@ -3624,6 +3644,46 @@ export interface operations {
                 };
             };
             400: components["responses"]["PlainTextError"];
+            403: components["responses"]["PlainTextError"];
+        };
+    };
+    createPublicShareFromReceivedResource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    resourceId: string;
+                    /** @description 相对于共享资源根目录的文件路径；资源本身为文件时可为空 */
+                    relativePath?: string;
+                    /**
+                     * @default download
+                     * @enum {string}
+                     */
+                    mode?: "download" | "preview";
+                    /** Format: int64 */
+                    expiresValue?: number;
+                    /** @enum {string} */
+                    expiresUnit?: "minute" | "hour" | "day" | "week" | "month" | "year" | "never";
+                };
+            };
+        };
+        responses: {
+            /** @description 分享创建成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicShare"];
+                };
+            };
+            400: components["responses"]["PlainTextError"];
+            401: components["responses"]["PlainTextError"];
             403: components["responses"]["PlainTextError"];
         };
     };

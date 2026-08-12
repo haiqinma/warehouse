@@ -393,6 +393,7 @@ func (c *Container) initServices() error {
 		c.Logger,
 	)
 	c.SharedResourceAccessService = service.NewSharedResourceAccessService(c.SharedResourceGrantRepository)
+	c.ShareService.SetSharedResourceAccess(c.SharedResourceAccessService)
 	c.UploadSessionService.SetSharedResourceAccess(c.SharedResourceAccessService)
 
 	c.Logger.Info("services initialized", zap.Bool("quota_enabled", true))

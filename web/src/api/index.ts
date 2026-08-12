@@ -383,6 +383,25 @@ export const shareApi = {
     })
   },
 
+  createFromReceivedResource(payload: {
+    resourceId: string
+    relativePath: string
+    mode?: ShareMode
+    expiresValue?: number
+    expiresUnit?: ShareExpiryUnit
+  }) {
+    return request<{
+      token: string
+      name: string
+      path: string
+      mode: ShareMode
+      url: string
+      viewCount: number
+      downloadCount: number
+      expiresAt?: string
+    }>('/api/v1/public/share/create-from-resource', { method: 'POST', body: payload })
+  },
+
   list() {
     return request<{
       items: ShareItem[]
