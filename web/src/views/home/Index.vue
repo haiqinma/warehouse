@@ -781,6 +781,9 @@ const sharedParentTargetPath = computed(() => {
   return parts.length > 0 ? '/' + parts.join('/') + '/' : '/'
 })
 const sortedFileList = computed(() => [...fileList.value].sort(compareItemsByModifiedDesc))
+const sortedRecycleList = computed(() => [...recycleList.value].sort(compareItemsByDeletedAtDesc))
+const sortedSharedWithMeList = computed(() => [...sharedWithMeList.value].sort(compareItemsByCreatedAtDesc))
+const sortedSharedEntries = computed(() => [...sharedEntries.value].sort(compareItemsByModifiedDesc))
 const selectedFileCount = computed(() => selectedFileRows.value.length)
 const fileSelectionSummaryText = computed(() => {
   const count = selectedFileCount.value
@@ -802,7 +805,7 @@ const filteredFileList = computed(() => {
   if (!token) return sortedFileList.value
   return sortedFileList.value.filter(item => item.name.toLowerCase().includes(token))
 })
-const filteredRecycleList = computed(() => recycleList.value)
+const filteredRecycleList = computed(() => sortedRecycleList.value)
 const filteredShareList = computed(() => {
   const token = searchToken.value
   if (!token) return shareList.value
@@ -825,8 +828,8 @@ const filteredDirectShareList = computed(() => {
 })
 const filteredSharedWithMeList = computed(() => {
   const token = searchToken.value
-  if (!token) return sharedWithMeList.value
-  return sharedWithMeList.value.filter(item => {
+  if (!token) return sortedSharedWithMeList.value
+  return sortedSharedWithMeList.value.filter(item => {
     if (item.name.toLowerCase().includes(token)) return true
     if (item.ownerName?.toLowerCase().includes(token)) return true
     if (`${item.grantCount} 条有效授权`.includes(token)) return true
@@ -835,11 +838,11 @@ const filteredSharedWithMeList = computed(() => {
 })
 const filteredSharedEntries = computed(() => {
   const token = searchToken.value
-  if (!token) return sharedEntries.value
-  return sharedEntries.value.filter(item => item.name.toLowerCase().includes(token))
+  if (!token) return sortedSharedEntries.value
+  return sortedSharedEntries.value.filter(item => item.name.toLowerCase().includes(token))
 })
 const previewImageItems = computed(() => {
-  const items = isSharedBrowse.value ? sharedEntries.value : sortedFileList.value
+  const items = isSharedBrowse.value ? sortedSharedEntries.value : sortedFileList.value
   return items.filter(item => isImagePreviewItem(item))
 })
 const previewImageIndex = computed(() => {
@@ -1412,11 +1415,25 @@ function parseModifiedTimestamp(modified?: string): number {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-function compareItemsByModifiedDesc<T extends { name: string; modified?: string; isDir?: boolean }>(a: T, b: T): number {
-  if (typeof a.isDir === 'boolean' && typeof b.isDir === 'boolean' && a.isDir !== b.isDir) {
-    return a.isDir ? -1 : 1
-  }
+function compareItemsByModifiedDesc<T extends { name: string; modified?: string }>(a: T, b: T): number {
   const diff = parseModifiedTimestamp(b.modified) - parseModifiedTimestamp(a.modified)
+  if (diff !== 0) return diff
+  return a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' })
+}
+
+function parseOptionalTimestamp(value?: string): number {
+  const parsed = Date.parse(String(value || '').trim())
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function compareItemsByCreatedAtDesc<T extends { name: string; createdAt?: string }>(a: T, b: T): number {
+  const diff = parseOptionalTimestamp(b.createdAt) - parseOptionalTimestamp(a.createdAt)
+  if (diff !== 0) return diff
+  return a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' })
+}
+
+function compareItemsByDeletedAtDesc<T extends { name: string; deletedAt?: string }>(a: T, b: T): number {
+  const diff = parseOptionalTimestamp(b.deletedAt) - parseOptionalTimestamp(a.deletedAt)
   if (diff !== 0) return diff
   return a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' })
 }
