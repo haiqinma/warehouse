@@ -18,6 +18,7 @@ type Router struct {
 	healthHandler              *handler.HealthHandler
 	internalReplicationHandler *handler.InternalReplicationHandler
 	web3Handler                *handler.Web3Handler
+	passportHandler            *handler.PassportHandler
 	emailAuthHandler           *handler.EmailAuthHandler
 	assetsHandler              *handler.AssetsHandler
 	assetObjectHandler         *handler.AssetObjectHandler
@@ -43,6 +44,7 @@ func NewRouter(
 	healthHandler *handler.HealthHandler,
 	internalReplicationHandler *handler.InternalReplicationHandler,
 	web3Handler *handler.Web3Handler,
+	passportHandler *handler.PassportHandler,
 	emailAuthHandler *handler.EmailAuthHandler,
 	assetsHandler *handler.AssetsHandler,
 	assetObjectHandler *handler.AssetObjectHandler,
@@ -66,6 +68,7 @@ func NewRouter(
 		healthHandler:              healthHandler,
 		internalReplicationHandler: internalReplicationHandler,
 		web3Handler:                web3Handler,
+		passportHandler:            passportHandler,
 		emailAuthHandler:           emailAuthHandler,
 		assetsHandler:              assetsHandler,
 		assetObjectHandler:         assetObjectHandler,
@@ -107,6 +110,11 @@ func (r *Router) Setup() http.Handler {
 	mux.HandleFunc("/api/v1/public/auth/refresh", r.web3Handler.HandleRefresh)
 	mux.HandleFunc("/api/v1/public/auth/logout", r.web3Handler.HandleLogout)
 	mux.HandleFunc("/api/v1/public/auth/password/login", r.web3Handler.HandlePasswordLogin)
+	if r.passportHandler != nil {
+		mux.HandleFunc("/api/v1/public/auth/passport/session", r.passportHandler.HandleSession)
+		mux.HandleFunc("/api/v1/public/auth/passport/status", r.passportHandler.HandleStatus)
+		mux.HandleFunc("/api/v1/public/auth/passport/callback", r.passportHandler.HandleCallback)
+	}
 	if r.emailAuthHandler != nil {
 		mux.HandleFunc("/api/v1/public/auth/email/code", r.emailAuthHandler.HandleSendCode)
 		mux.HandleFunc("/api/v1/public/auth/email/login", r.emailAuthHandler.HandleLogin)

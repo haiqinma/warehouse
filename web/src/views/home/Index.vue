@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed, watch, defineAsyncComponent, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
-import { ArrowLeft, ArrowRight, ArrowUp, Delete, Expand, Fold, Folder, FolderAdd, FolderOpened, Grid, Refresh, Upload, DocumentCopy, Share, Search, MoreFilled, Notebook, User, Lock, Unlock } from '@element-plus/icons-vue'
+import QRCode from 'qrcode'
+import { ArrowLeft, ArrowRight, ArrowUp, Connection, Delete, Expand, Fold, Folder, FolderAdd, FolderOpened, Grid, Key, Refresh, Upload, DocumentCopy, Share, Search, MoreFilled, Notebook, User, Lock, Unlock } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { getSupportedCipherSuites, type CipherSuiteInfo } from '@yeying-community/web3-bs'
 import { quotaApi, userApi, recycleApi, shareApi, directShareApi, assetsApi, webdavAccessKeyApi, s3CredentialApi, adminUserApi, type RecycleItem, type ShareItem, type DirectShareItem, type ReceivedSharedResource, type AssetSpaceInfo, type ShareExpiryUnit, type ShareMode, type AccessKeyPermission, type WebDAVAccessKeyItem, type CreateWebDAVAccessKeyResult, type S3CredentialItem, type CreateS3CredentialResult, type AdminUserItem, type GroupMember } from '@/api'
-import { AUTH_CHANGED_EVENT, isLoggedIn, getUsername, getWalletName, getCurrentAccount, getUserPermissions, getUserCreatedAt, loginWithWallet, focusPendingWalletApproval, loginWithPassword, sendEmailCode, loginWithEmailCode, getAccountHistory, watchWalletAccounts, watchWalletProvider } from '@/plugins/auth'
+import { AUTH_CHANGED_EVENT, isLoggedIn, getUsername, getWalletName, getCurrentAccount, getUserPermissions, getUserCreatedAt, loginWithWallet, focusPendingWalletApproval, createPassportLoginSession, pollPassportLoginStatus, getAccountHistory, watchWalletAccounts, watchWalletProvider } from '@/plugins/auth'
 import { decryptBlobContent, encryptFileContent, encryptTextContent } from '@/utils/crypto'
 import {
   buildEncryptedDirectoryPasswordContext,
@@ -56,21 +57,16 @@ const userInfo = ref<{
   updated_at?: string
   has_password?: boolean
 } | null>(null)
-const loginSubmitting = ref(false)
-const showPasswordLoginForm = ref(false)
-const passwordLoginForm = ref({
-  username: '',
-  password: ''
-})
-const showEmailLoginForm = ref(false)
-const emailLoginForm = ref({
-  email: '',
-  code: ''
-})
-const emailCodeSending = ref(false)
-const emailLoginSubmitting = ref(false)
-const emailCodeCountdown = ref(0)
-let emailCodeTimer: number | null = null
+const loginMode = ref<'passport' | 'wallet'>('passport')
+const passportLoading = ref(false)
+const passportPolling = ref(false)
+const passportSessionId = ref('')
+const passportQrcodeUrl = ref('')
+const passportQrcodeImage = ref('')
+const passportStatusText = ref('')
+const passportPollInterval = ref(2)
+let passportTimer: number | null = null
+let passportRequestSeq = 0
 const isMobileViewport = ref(false)
 const walletHistory = ref<string[]>([])
 const selectedWalletAccount = ref('')
@@ -219,6 +215,7 @@ const previewBlob = ref<Blob | null>(null)
 const previewSourceUrl = ref('')
 const previewReadOnly = ref(false)
 let previewRequestSeq = 0
+let passportBroadcastChannel: BroadcastChannel | null = null
 const encryptedDirectoryRoots = ref<string[]>([])
 const encryptedDirectoryMetadata = ref<Record<string, EncryptedDirectoryMetadata>>({})
 const cipherSuiteOptions = ref<CipherSuiteOption[]>([
@@ -1747,6 +1744,130 @@ async function handleWalletLogin() {
   }
 }
 
+function clearPassportTimer() {
+  if (passportTimer !== null) {
+    window.clearInterval(passportTimer)
+    passportTimer = null
+  }
+}
+
+async function refreshPassportLogin() {
+  passportRequestSeq += 1
+  const requestSeq = passportRequestSeq
+  clearPassportTimer()
+  passportLoading.value = true
+  passportPolling.value = false
+  passportSessionId.value = ''
+  passportQrcodeUrl.value = ''
+  passportQrcodeImage.value = ''
+  passportStatusText.value = ''
+  try {
+    const session = await createPassportLoginSession()
+    if (requestSeq !== passportRequestSeq) return
+    passportSessionId.value = session.sessionId
+    passportQrcodeUrl.value = session.qrcodeUrl
+    passportPollInterval.value = Math.max(1, session.pollInterval || 2)
+    passportQrcodeImage.value = await QRCode.toDataURL(session.qrcodeUrl, {
+      width: 220,
+      margin: 2,
+      color: {
+        dark: '#162033',
+        light: '#ffffff'
+      }
+    })
+    startPassportPolling()
+  } catch (error: any) {
+    if (requestSeq !== passportRequestSeq) return
+    passportStatusText.value = error?.message || '通行证登录暂不可用'
+  } finally {
+    if (requestSeq === passportRequestSeq) {
+      passportLoading.value = false
+    }
+  }
+}
+
+function startPassportPolling() {
+  clearPassportTimer()
+  if (!passportSessionId.value) return
+  void checkPassportStatus()
+  passportTimer = window.setInterval(() => {
+    void checkPassportStatus()
+  }, passportPollInterval.value * 1000)
+}
+
+async function checkPassportStatus() {
+  if (!passportSessionId.value || passportPolling.value) return
+  passportPolling.value = true
+  const sessionId = passportSessionId.value
+  try {
+    const status = await pollPassportLoginStatus(sessionId)
+    if (sessionId !== passportSessionId.value) return
+    if (status.token || status.status === 'approved') {
+      clearPassportTimer()
+      passportStatusText.value = '登录成功，正在进入资产仓库'
+      window.location.reload()
+      return
+    }
+    if (status.status === 'scanned') {
+      passportStatusText.value = '已扫码，请在手机上确认登录'
+    } else if (status.status === 'rejected') {
+      passportStatusText.value = '已拒绝登录，请刷新二维码'
+      clearPassportTimer()
+    } else if (status.status === 'expired') {
+      passportStatusText.value = '二维码已过期，请刷新'
+      clearPassportTimer()
+    } else {
+      passportStatusText.value = status.message || ''
+    }
+  } catch (error: any) {
+    if (error?.code === 'expired') {
+      passportStatusText.value = '二维码已过期，请刷新'
+      clearPassportTimer()
+    } else {
+      passportStatusText.value = error?.message || '通行证登录状态异常'
+    }
+  } finally {
+    passportPolling.value = false
+  }
+}
+
+function switchLoginMode(mode: 'passport' | 'wallet') {
+  loginMode.value = mode
+  if (mode === 'passport' && !passportSessionId.value && !passportLoading.value) {
+    void refreshPassportLogin()
+  }
+}
+
+function openPassportAuthorize() {
+  if (!passportQrcodeUrl.value) return
+  window.open(passportQrcodeUrl.value, '_blank', 'noopener,noreferrer')
+}
+
+function handlePassportCallbackEvent(payload: unknown) {
+  let data = payload as any
+  if (typeof payload === 'string') {
+    try {
+      data = JSON.parse(payload)
+    } catch {
+      return
+    }
+  }
+  if (data?.action !== 'warehouse-passport-callback') return
+  if (!passportSessionId.value || data?.sessionId !== passportSessionId.value) return
+  passportStatusText.value = '已确认，正在完成登录'
+  void checkPassportStatus()
+}
+
+function handlePassportStorage(event: StorageEvent) {
+  if (event.key !== '__warehouse_passport_callback__' || !event.newValue) return
+  handlePassportCallbackEvent(event.newValue)
+}
+
+function handlePassportMessage(event: MessageEvent) {
+  if (event.origin !== window.location.origin) return
+  handlePassportCallbackEvent(event.data)
+}
+
 function formatLoginHistoryAddress(address?: string): string {
   const trimmed = String(address || '').trim()
   if (!trimmed) return '-'
@@ -1765,82 +1886,6 @@ async function handleWalletHistoryVisibleChange(visible: boolean) {
   if (!popper) return
   popper.style.width = `${selectWidth}px`
   popper.style.minWidth = `${selectWidth}px`
-}
-
-async function handlePasswordLogin() {
-  const username = passwordLoginForm.value.username.trim()
-  const password = passwordLoginForm.value.password
-  if (!username || !password) {
-    showError('请输入用户名和密码')
-    return
-  }
-  loginSubmitting.value = true
-  try {
-    await loginWithPassword(username, password)
-    window.location.reload()
-  } catch (error: any) {
-    showError(error?.message || '登录失败')
-  } finally {
-    loginSubmitting.value = false
-  }
-}
-
-function clearEmailCodeTimer() {
-  if (emailCodeTimer !== null) {
-    clearInterval(emailCodeTimer)
-    emailCodeTimer = null
-  }
-}
-
-function startEmailCountdown(seconds: number) {
-  clearEmailCodeTimer()
-  emailCodeCountdown.value = Math.max(0, Math.floor(seconds))
-  if (emailCodeCountdown.value <= 0) return
-  emailCodeTimer = window.setInterval(() => {
-    if (emailCodeCountdown.value <= 1) {
-      emailCodeCountdown.value = 0
-      clearEmailCodeTimer()
-      return
-    }
-    emailCodeCountdown.value -= 1
-  }, 1000)
-}
-
-async function handleSendEmailCode() {
-  const email = emailLoginForm.value.email.trim()
-  if (!email) {
-    showError('请输入邮箱')
-    return
-  }
-  emailCodeSending.value = true
-  try {
-    const data = await sendEmailCode(email)
-    const retryAfter = Number(data?.retryAfter || 60)
-    startEmailCountdown(retryAfter)
-    showSuccess('验证码已发送')
-  } catch (error: any) {
-    showError(error?.message || '发送验证码失败')
-  } finally {
-    emailCodeSending.value = false
-  }
-}
-
-async function handleEmailLogin() {
-  const email = emailLoginForm.value.email.trim()
-  const code = emailLoginForm.value.code.trim()
-  if (!email || !code) {
-    showError('请输入邮箱和验证码')
-    return
-  }
-  emailLoginSubmitting.value = true
-  try {
-    await loginWithEmailCode(email, code)
-    window.location.reload()
-  } catch (error: any) {
-    showError(error?.message || '登录失败')
-  } finally {
-    emailLoginSubmitting.value = false
-  }
 }
 
 // 获取文件列表 (WebDAV PROPFIND)
@@ -5702,6 +5747,15 @@ onMounted(() => {
   })
   void loadCipherSuiteOptions()
   syncWalletHistory()
+  if (!loggedIn.value) {
+    void refreshPassportLogin()
+  }
+  window.addEventListener('storage', handlePassportStorage)
+  window.addEventListener('message', handlePassportMessage)
+  if ('BroadcastChannel' in window) {
+    passportBroadcastChannel = new BroadcastChannel('warehouse-passport-login')
+    passportBroadcastChannel.onmessage = event => handlePassportCallbackEvent(event.data)
+  }
   void (async () => {
     stopAccountWatch = await watchWalletAccounts(({ account }) => {
       syncWalletHistory(account || undefined)
@@ -5711,9 +5765,13 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', syncViewportMode)
+  window.removeEventListener('storage', handlePassportStorage)
+  window.removeEventListener('message', handlePassportMessage)
+  passportBroadcastChannel?.close()
+  passportBroadcastChannel = null
+  clearPassportTimer()
   stopWalletProviderWatch?.()
   stopAccountWatch?.()
-  clearEmailCodeTimer()
 })
 </script>
 
@@ -5722,142 +5780,87 @@ onBeforeUnmount(() => {
     <!-- 未登录状态 -->
     <div v-if="!loggedIn" class="login-page">
       <div class="login-floating-container">
-        <div class="login-top-banner">
-          <div class="login-top-banner-inner">
-            <img src="/logo.svg" alt="资产仓库" class="login-top-banner-logo" />
-            <span>
-              资产仓库 · 连接钱包或账号后，安全管理文件、分享与回收站
-              <a href="https://www.yeying.pub" target="_blank" rel="noopener noreferrer">
-                了解夜莺社区
-              </a>
-            </span>
-          </div>
-        </div>
         <div class="login-hero">
           <div class="login-card">
-            <div class="login-section">
-              <div v-if="walletPresent && walletHistory.length" class="login-wallet-row">
-                <el-select
-                  ref="walletHistorySelectRef"
-                  v-model="selectedWalletAccount"
-                  placeholder="历史账户（可选）"
-                  class="login-history-select"
-                  popper-class="login-history-select-popper"
-                  :disabled="walletLoginSubmitting"
-                  @visible-change="handleWalletHistoryVisibleChange"
-                >
-                  <el-option
-                    v-for="accountItem in walletHistory"
-                    :key="accountItem"
-                    :value="accountItem"
-                    :label="formatLoginHistoryAddress(accountItem)"
-                  >
-                    <span class="login-history-option mono">{{ formatLoginHistoryAddress(accountItem) }}</span>
-                  </el-option>
-                </el-select>
-                <el-button
-                  type="primary"
-                  class="login-main-btn login-wallet-btn login-wallet-action-btn"
-                  @click="handleWalletLogin"
-                >
-                  {{ walletLoginSubmitting ? '查看钱包弹窗' : '钱包登陆' }}
+            <div class="login-card-switch">
+              <el-tooltip :content="loginMode === 'passport' ? '钱包登录' : '通行证登录'" placement="left">
+                <el-button class="login-mode-button" circle @click="switchLoginMode(loginMode === 'passport' ? 'wallet' : 'passport')">
+                  <el-icon>
+                    <component :is="loginMode === 'passport' ? Connection : Key" />
+                  </el-icon>
                 </el-button>
-              </div>
-              <el-button
-                v-else-if="walletPresent"
-                type="primary"
-                class="login-main-btn login-wallet-btn"
-                @click="handleWalletLogin"
-              >
-                {{ walletLoginSubmitting ? '查看钱包弹窗' : '钱包登陆' }}
-              </el-button>
-              <div v-else class="login-warning">未检测到钱包插件</div>
+              </el-tooltip>
             </div>
-            <div class="login-divider"><span>或</span></div>
-            <div class="login-section">
-              <el-button
-                type="primary"
-                class="login-main-btn login-password-btn"
-                @click="showPasswordLoginForm = !showPasswordLoginForm"
-              >
-                密码登陆
-              </el-button>
-              <div class="login-form-shell" :class="{ 'is-collapsed': !showPasswordLoginForm }">
-                <el-form class="login-form" @submit.prevent="handlePasswordLogin">
-                  <el-form-item>
-                    <el-input
-                      v-model="passwordLoginForm.username"
-                      placeholder="用户名"
-                      autocomplete="username"
-                    />
-                  </el-form-item>
-                  <el-form-item>
-                    <el-input
-                      v-model="passwordLoginForm.password"
-                      type="password"
-                      show-password
-                      placeholder="密码"
-                      autocomplete="current-password"
-                    />
-                  </el-form-item>
-                  <el-button
-                    type="primary"
-                    native-type="submit"
-                    :loading="loginSubmitting"
-                    class="login-submit login-password-submit-btn"
-                  >
-                    登录
-                  </el-button>
-                </el-form>
+            <div class="login-brand">
+              <img src="/logo.svg" alt="资产仓库" class="login-brand-logo" />
+              <div>
+                <h1>资产仓库</h1>
+                <p>{{ loginMode === 'passport' ? '使用夜莺通行证扫码登录' : '连接钱包后进入资产仓库' }}</p>
               </div>
             </div>
-            <div class="login-divider"><span>或</span></div>
-            <div class="login-section">
-              <el-button
-                type="primary"
-                class="login-main-btn login-email-btn"
-                @click="showEmailLoginForm = !showEmailLoginForm"
-              >
-                邮箱登陆
-              </el-button>
-              <div class="login-form-shell" :class="{ 'is-collapsed': !showEmailLoginForm }">
-                <el-form class="login-form" @submit.prevent="handleEmailLogin">
-                  <el-form-item>
-                    <el-input
-                      v-model="emailLoginForm.email"
-                      placeholder="邮箱"
-                      autocomplete="email"
-                    />
-                  </el-form-item>
-                  <el-form-item>
-                    <div class="email-code-row">
-                      <el-input
-                        v-model="emailLoginForm.code"
-                        placeholder="验证码"
-                        autocomplete="one-time-code"
-                      />
-                      <el-button
-                        type="primary"
-                        class="email-code-button login-code-btn"
-                        native-type="button"
-                        :loading="emailCodeSending"
-                        :disabled="emailCodeCountdown > 0"
-                        @click="handleSendEmailCode"
-                      >
-                        {{ emailCodeCountdown > 0 ? `${emailCodeCountdown}s` : '发送验证码' }}
-                      </el-button>
-                    </div>
-                  </el-form-item>
+
+            <transition name="login-mode" mode="out-in">
+              <div v-if="loginMode === 'passport'" key="passport" class="login-passport-panel">
+                <button type="button" class="login-qrcode-frame" :disabled="passportLoading" @click="refreshPassportLogin">
+                  <img v-if="passportQrcodeImage" :src="passportQrcodeImage" alt="通行证登录二维码" />
+                  <el-icon v-else class="login-qrcode-placeholder" :class="{ 'is-loading': passportLoading }"><Refresh /></el-icon>
+                </button>
+                <div class="login-status-line">
+                  {{ passportStatusText || '请使用手机相机或夜莺钱包扫码确认登录' }}
+                </div>
+                <div class="login-passport-actions">
+                  <el-button text @click="openPassportAuthorize">无法扫码？使用本机通行证登录</el-button>
+                  <el-button text @click="refreshPassportLogin">刷新二维码</el-button>
+                </div>
+              </div>
+
+              <div v-else key="wallet" class="login-wallet-panel">
+                <div class="login-wallet-icon">
+                  <el-icon><Connection /></el-icon>
+                </div>
+                <div v-if="walletPresent && walletHistory.length" class="login-wallet-row">
+                  <el-select
+                    ref="walletHistorySelectRef"
+                    v-model="selectedWalletAccount"
+                    placeholder="历史账户（可选）"
+                    class="login-history-select"
+                    popper-class="login-history-select-popper"
+                    :disabled="walletLoginSubmitting"
+                    @visible-change="handleWalletHistoryVisibleChange"
+                  >
+                    <el-option
+                      v-for="accountItem in walletHistory"
+                      :key="accountItem"
+                      :value="accountItem"
+                      :label="formatLoginHistoryAddress(accountItem)"
+                    >
+                      <span class="login-history-option mono">{{ formatLoginHistoryAddress(accountItem) }}</span>
+                    </el-option>
+                  </el-select>
                   <el-button
                     type="primary"
-                    native-type="submit"
-                    :loading="emailLoginSubmitting"
-                    class="login-submit login-email-submit-btn"
+                    class="login-main-btn login-wallet-btn login-wallet-action-btn"
+                    @click="handleWalletLogin"
                   >
-                    登录
+                    {{ walletLoginSubmitting ? '查看钱包弹窗' : '钱包登录' }}
                   </el-button>
-                </el-form>
+                </div>
+                <template v-else-if="walletPresent">
+                  <el-button
+                    type="primary"
+                    class="login-main-btn login-wallet-btn"
+                    :loading="walletLoginSubmitting"
+                    @click="handleWalletLogin"
+                  >
+                    钱包登录
+                  </el-button>
+                </template>
+                <div v-else class="login-warning">未检测到钱包插件</div>
               </div>
+            </transition>
+
+            <div class="login-bottom-link">
+              <a href="https://www.yeying.pub" target="_blank" rel="noopener noreferrer">了解夜莺社区</a>
             </div>
           </div>
         </div>
@@ -7338,115 +7341,170 @@ onBeforeUnmount(() => {
 }
 
 .login-page {
-  display: flex;
-  justify-content: center;
-  align-items: center;
+  display: grid;
+  place-items: center;
   width: 100%;
   height: 100%;
-  padding: 24px;
+  padding: 24px 16px;
   box-sizing: border-box;
-  color: #606266;
+  color: #1f2937;
+  background:
+    linear-gradient(180deg, #eef4fb 0%, #f8fafc 48%, #ffffff 100%);
 }
 
 .login-floating-container {
-  width: min(1080px, 94vw);
-  height: min(860px, 90vh);
-  min-height: 620px;
-  background: #ffffff;
-  border: 0;
-  border-radius: 20px;
-  box-shadow: none;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.login-top-banner {
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: 14px 24px;
-  box-sizing: border-box;
-  background: #eaf1fb;
-  border-bottom: 1px solid #dce7f7;
-}
-
-.login-top-banner-inner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 14px;
-  color: #2f3f57;
-
-  span {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    line-height: 1.5;
-  }
-
-  a {
-    color: #2f7df6;
-    text-decoration: none;
-    white-space: nowrap;
-  }
-
-  a:hover {
-    text-decoration: underline;
-  }
-}
-
-.login-top-banner-logo {
-  width: 22px;
-  height: 22px;
-  display: block;
-  object-fit: contain;
+  width: min(520px, 100%);
 }
 
 .login-hero {
-  flex: 1;
   width: 100%;
-  padding: clamp(24px, 4vw, 44px);
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: clamp(20px, 3vw, 40px);
+  display: grid;
+  place-items: center;
 }
 
 .login-warning {
-  color: #cf8a1f;
+  width: 100%;
+  box-sizing: border-box;
+  color: #a16207;
   font-size: 14px;
   text-align: center;
-  background: #fff8eb;
-  border: 1px solid #f5dfb8;
-  border-radius: 10px;
-  padding: 8px 12px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 10px 12px;
 }
 
 .login-card {
-  width: min(430px, 100%);
+  position: relative;
+  width: 100%;
+  min-height: 510px;
   background: #fff;
-  border: 0;
-  border-radius: 14px;
-  padding: 18px 18px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 36px 40px 30px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  box-shadow: none;
+  align-items: center;
+  gap: 24px;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.08);
 }
 
-.login-section {
+.login-card-switch {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+}
+
+.login-mode-button {
+  width: 42px;
+  height: 42px;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+
+.login-brand {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.login-brand-logo {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+}
+
+.login-brand h1 {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.25;
+  font-weight: 650;
+  color: #111827;
+}
+
+.login-brand p {
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.login-passport-panel,
+.login-wallet-panel {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.login-qrcode-frame {
+  width: 248px;
+  height: 248px;
+  padding: 13px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.login-qrcode-frame:disabled {
+  cursor: default;
+}
+
+.login-qrcode-frame img {
+  width: 220px;
+  height: 220px;
+  display: block;
+}
+
+.login-qrcode-placeholder {
+  font-size: 34px;
+  color: #94a3b8;
+}
+
+.login-qrcode-placeholder.is-loading {
+  animation: rotating 1s linear infinite;
+}
+
+.login-status-line {
+  min-height: 22px;
+  font-size: 14px;
+  color: #475569;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.login-passport-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.login-wallet-icon {
+  width: 116px;
+  height: 116px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  font-size: 42px;
 }
 
 .login-main-btn {
   width: 100%;
-  height: 40px;
-  border-radius: 10px;
+  height: 44px;
+  border-radius: 8px;
   font-weight: 500;
   align-self: stretch;
 }
@@ -7481,9 +7539,9 @@ onBeforeUnmount(() => {
 }
 
 :deep(.login-history-select .el-select__wrapper) {
-  min-height: 40px;
-  border-radius: 10px;
-  box-shadow: inset 0 0 0 1.5px #9ab7e6;
+  min-height: 44px;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px #cbd5e1;
   transition: box-shadow 0.16s ease;
 }
 
@@ -7495,49 +7553,8 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 0 0 2px #3f7fe0;
 }
 
-.login-divider {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: #9aa5b5;
-  font-size: 12px;
-}
-
-.login-divider::before,
-.login-divider::after {
-  content: '';
-  height: 1px;
-  flex: 1;
-  background: #edf1f6;
-}
-
-.login-form :deep(.el-form-item) {
-  margin-bottom: 12px;
-}
-
-.login-submit {
-  width: 100%;
-}
-
-.email-code-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.email-code-row :deep(.el-input) {
-  flex: 1;
-}
-
-.email-code-button {
-  flex: none;
-  white-space: nowrap;
-}
-
 :deep(.el-button.login-main-btn),
-:deep(.el-button.login-submit),
-:deep(.el-button.email-code-button) {
+:deep(.el-button.login-submit) {
   border: 0 !important;
   color: #ffffff !important;
   --el-button-border-color: transparent;
@@ -7554,44 +7571,18 @@ onBeforeUnmount(() => {
 }
 
 :deep(.el-button.login-main-btn:not(.is-disabled):hover),
-:deep(.el-button.login-submit:not(.is-disabled):hover),
-:deep(.el-button.email-code-button:not(.is-disabled):hover) {
+:deep(.el-button.login-submit:not(.is-disabled):hover) {
   background-color: #356fc7 !important;
 }
 
 :deep(.el-button.login-main-btn:not(.is-disabled):active),
-:deep(.el-button.login-submit:not(.is-disabled):active),
-:deep(.el-button.email-code-button:not(.is-disabled):active) {
+:deep(.el-button.login-submit:not(.is-disabled):active) {
   background-color: #2e62b2 !important;
   transform: translateY(0);
 }
 
-:deep(.el-button.login-main-btn.login-password-btn),
-:deep(.el-button.login-main-btn.login-email-btn) {
-  border: 1px solid #b7cae7 !important;
-  color: #2f5fa8 !important;
-  --el-button-text-color: #2f5fa8;
-  --el-button-hover-text-color: #24508f;
-  --el-button-active-text-color: #1f467d;
-  --el-button-border-color: #b7cae7;
-  --el-button-hover-border-color: #9fb8de;
-  --el-button-active-border-color: #8caad7;
-  background-color: #f4f8ff !important;
-}
-
-:deep(.el-button.login-main-btn.login-password-btn:not(.is-disabled):hover),
-:deep(.el-button.login-main-btn.login-email-btn:not(.is-disabled):hover) {
-  background-color: #ecf3ff !important;
-}
-
-:deep(.el-button.login-main-btn.login-password-btn:not(.is-disabled):active),
-:deep(.el-button.login-main-btn.login-email-btn:not(.is-disabled):active) {
-  background-color: #e4eeff !important;
-}
-
 :deep(.el-button.login-main-btn.is-disabled),
-:deep(.el-button.login-submit.is-disabled),
-:deep(.el-button.email-code-button.is-disabled) {
+:deep(.el-button.login-submit.is-disabled) {
   border: 0 !important;
   color: #f3f7ff !important;
   background-image: none !important;
@@ -7599,29 +7590,30 @@ onBeforeUnmount(() => {
   box-shadow: none !important;
 }
 
-.login-form-shell {
-  width: 100%;
-  overflow: hidden;
-  max-height: 300px;
-  opacity: 1;
-  transform-origin: top;
-  transition: max-height 0.28s ease, opacity 0.2s ease;
+.login-bottom-link {
+  margin-top: auto;
+  font-size: 13px;
 }
 
-.login-form-shell.is-collapsed {
-  max-height: 0;
+.login-bottom-link a,
+.login-passport-actions :deep(.el-button) {
+  color: #2563eb;
+}
+
+.login-mode-enter-active,
+.login-mode-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.login-mode-enter-from,
+.login-mode-leave-to {
   opacity: 0;
-  pointer-events: none;
+  transform: translateY(8px);
 }
 
 @media (max-width: 980px) {
   .login-hero {
-    flex-direction: column;
-    justify-content: flex-start;
-  }
-
-  .login-card {
-    width: min(430px, 100%);
+    justify-content: center;
   }
 }
 
@@ -7634,38 +7626,38 @@ onBeforeUnmount(() => {
     width: 100%;
     height: 100%;
     min-height: 0;
-    border-radius: 0;
-    border: 0;
-    box-shadow: none;
-  }
-
-  .login-top-banner {
-    padding: 10px 12px;
-  }
-
-  .login-top-banner-inner {
-    font-size: 12px;
   }
 
   .login-hero {
-    padding: 18px 14px;
-    flex-direction: column;
-    justify-content: flex-start;
-    align-items: stretch;
-    gap: 14px;
+    height: 100%;
+    align-items: center;
   }
 
   .login-card {
     width: 100%;
-    padding: 14px;
+    min-height: min(560px, 100%);
+    padding: 30px 18px 24px;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
 
-  .email-code-row {
-    flex-wrap: wrap;
+  .login-wallet-row {
+    flex-direction: column;
   }
 
-  .email-code-button {
+  .login-wallet-action-btn {
     width: 100%;
+  }
+
+  .login-qrcode-frame {
+    width: 232px;
+    height: 232px;
+  }
+
+  .login-qrcode-frame img {
+    width: 204px;
+    height: 204px;
   }
 }
 

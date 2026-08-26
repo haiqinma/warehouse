@@ -14,6 +14,7 @@ type Config struct {
 	S3          S3Config          `yaml:"s3"`
 	WebDAV      WebDAVConfig      `yaml:"webdav"`
 	Web3        Web3Config        `yaml:"web3"`
+	Passport    PassportConfig    `yaml:"passport"`
 	Email       EmailConfig       `yaml:"email"`
 	Security    SecurityConfig    `yaml:"security"`
 	CORS        CORSConfig        `yaml:"cors"`
@@ -116,6 +117,15 @@ type Web3Config struct {
 	AutoCreateOnChallenge  bool          `yaml:"auto_create_on_challenge"`
 	AutoCreateOnUCAN       bool          `yaml:"auto_create_on_ucan"`
 	UCAN                   UCANConfig    `yaml:"ucan"`
+}
+
+// PassportConfig configures YeYing Passport QR-code login.
+type PassportConfig struct {
+	Enabled    bool          `yaml:"enabled"`
+	NodeURL    string        `yaml:"node_url"`
+	ClientID   string        `yaml:"client_id"`
+	Scope      string        `yaml:"scope"`
+	SessionTTL time.Duration `yaml:"session_ttl"`
 }
 
 // EmailConfig 邮箱验证码登录配置
@@ -263,6 +273,11 @@ func DefaultConfig() *Config {
 					PathPrefix: "/apps",
 				},
 			},
+		},
+		Passport: PassportConfig{
+			Enabled:    false,
+			Scope:      "identity.basic identity.email identity.wallet identity.avatar",
+			SessionTTL: 5 * time.Minute,
 		},
 		Email: EmailConfig{
 			Enabled:            false,

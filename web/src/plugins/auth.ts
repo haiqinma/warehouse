@@ -254,6 +254,32 @@ function rememberAccount(address: string): void {
   writeAccountHistory(next.slice(0, 10))
 }
 
+function applyLoginResult(data: Record<string, any>, fallbackAccount = ''): void {
+  const token = data.token
+  if (!token) {
+    throw new Error('登录失败：未返回 token')
+  }
+
+  applyAccessToken(token)
+  scheduleTokenRefresh(token)
+
+  const address = data.address || data.walletAddress || ''
+  if (address) {
+    localStorage.setItem('currentAccount', address)
+    localStorage.setItem('walletAddress', address)
+    rememberAccount(address)
+  } else if (data.email || fallbackAccount) {
+    localStorage.setItem('currentAccount', data.email || fallbackAccount)
+    localStorage.removeItem('walletAddress')
+  }
+
+  if (data.username) {
+    localStorage.setItem('username', data.username)
+  }
+
+  window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT))
+}
+
 export async function watchWalletAccounts(handler: (payload: { account: string | null; accounts: string[] }) => void): Promise<() => void> {
   const provider = await getProvider()
   if (!provider) {
@@ -341,28 +367,7 @@ export async function loginWithPassword(username: string, password: string): Pro
     throw new Error(payload?.message || '登录失败')
   }
 
-  const data = payload?.data || {}
-  const token = data.token
-  if (!token) {
-    throw new Error('登录失败：未返回 token')
-  }
-
-  applyAccessToken(token)
-  scheduleTokenRefresh(token)
-
-  if (data.address) {
-    localStorage.setItem('currentAccount', data.address)
-    localStorage.setItem('walletAddress', data.address)
-    rememberAccount(data.address)
-  } else {
-    localStorage.setItem('currentAccount', username)
-  }
-
-  if (data.username) {
-    localStorage.setItem('username', data.username)
-  }
-
-  window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT))
+  applyLoginResult(payload?.data || {}, username)
 }
 
 // 发送邮箱验证码
@@ -410,26 +415,75 @@ export async function loginWithEmailCode(email: string, code: string): Promise<v
     throw new Error(payload?.message || '登录失败')
   }
 
-  const data = payload?.data || {}
-  const token = data.token
-  if (!token) {
-    throw new Error('登录失败：未返回 token')
+  applyLoginResult(payload?.data || {}, email)
+}
+
+export interface PassportLoginSession {
+  sessionId: string
+  qrcodeUrl: string
+  status: string
+  expiresAt?: string
+  pollInterval: number
+}
+
+export interface PassportLoginStatus {
+  status: string
+  message?: string
+  token?: string
+}
+
+function normalizePassportPayload(payload: any): any {
+  if (payload?.code !== 0) {
+    const dataCode = payload?.data?.code || payload?.data?.status
+    const message = payload?.message || '通行证登录失败'
+    const error = new Error(message) as Error & { code?: string }
+    if (dataCode) error.code = String(dataCode)
+    throw error
   }
+  return payload?.data || {}
+}
 
-  applyAccessToken(token)
-  scheduleTokenRefresh(token)
-
-  const account = data.email || email
-  if (account) {
-    localStorage.setItem('currentAccount', account)
+export async function createPassportLoginSession(): Promise<PassportLoginSession> {
+  const response = await fetch(`${AUTH_BASE}/passport/session`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'accept': 'application/json'
+    }
+  })
+  const payload = normalizePassportPayload(await response.json().catch(() => null))
+  const sessionId = payload.session_id || payload.sessionId || ''
+  const qrcodeUrl = payload.qrcode_url || payload.qrcodeUrl || ''
+  if (!response.ok || !sessionId || !qrcodeUrl) {
+    throw new Error(payload?.message || '通行证登录未配置或暂不可用')
   }
-  localStorage.removeItem('walletAddress')
-
-  if (data.username) {
-    localStorage.setItem('username', data.username)
+  return {
+    sessionId,
+    qrcodeUrl,
+    status: payload.status || 'pending',
+    expiresAt: payload.expires_at || payload.expiresAt,
+    pollInterval: Number(payload.poll_interval || payload.pollInterval || 2) || 2
   }
+}
 
-  window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT))
+export async function pollPassportLoginStatus(sessionId: string): Promise<PassportLoginStatus> {
+  const query = new URLSearchParams({ session_id: sessionId })
+  const response = await fetch(`${AUTH_BASE}/passport/status?${query.toString()}`, {
+    headers: { 'accept': 'application/json' }
+  })
+  const payload = await response.json().catch(() => null)
+  const data = normalizePassportPayload(payload)
+  if (!response.ok) {
+    throw new Error(data?.message || payload?.message || `HTTP ${response.status}`)
+  }
+  if (data.token) {
+    applyLoginResult(data)
+  }
+  return {
+    status: data.status || 'pending',
+    message: data.message,
+    token: data.token
+  }
 }
 
 // 登出
