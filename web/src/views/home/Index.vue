@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed, watch, defineAsyncComponent, nextTick } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch, defineAsyncComponent } from 'vue'
 import { storeToRefs } from 'pinia'
 import QRCode from 'qrcode'
 import { ArrowLeft, ArrowRight, ArrowUp, Connection, Delete, Expand, Fold, Folder, FolderAdd, FolderOpened, Grid, Key, Refresh, Upload, DocumentCopy, Share, Search, MoreFilled, Notebook, User, Lock, Unlock } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { getSupportedCipherSuites, type CipherSuiteInfo } from '@yeying-community/web3-bs'
 import { quotaApi, userApi, recycleApi, shareApi, directShareApi, assetsApi, webdavAccessKeyApi, s3CredentialApi, adminUserApi, type RecycleItem, type ShareItem, type DirectShareItem, type ReceivedSharedResource, type AssetSpaceInfo, type ShareExpiryUnit, type ShareMode, type AccessKeyPermission, type WebDAVAccessKeyItem, type CreateWebDAVAccessKeyResult, type S3CredentialItem, type CreateS3CredentialResult, type AdminUserItem, type GroupMember } from '@/api'
-import { AUTH_CHANGED_EVENT, isLoggedIn, getUsername, getWalletName, getCurrentAccount, getUserPermissions, getUserCreatedAt, loginWithWallet, focusPendingWalletApproval, createPassportLoginSession, pollPassportLoginStatus, getAccountHistory, watchWalletAccounts, watchWalletProvider } from '@/plugins/auth'
+import { AUTH_CHANGED_EVENT, isLoggedIn, getUsername, getWalletName, getCurrentAccount, getUserPermissions, getUserCreatedAt, loginWithWallet, focusPendingWalletApproval, createPassportLoginSession, pollPassportLoginStatus, watchWalletProvider } from '@/plugins/auth'
 import { decryptBlobContent, encryptFileContent, encryptTextContent } from '@/utils/crypto'
 import {
   buildEncryptedDirectoryPasswordContext,
@@ -68,13 +68,9 @@ const passportPollInterval = ref(2)
 let passportTimer: number | null = null
 let passportRequestSeq = 0
 const isMobileViewport = ref(false)
-const walletHistory = ref<string[]>([])
-const selectedWalletAccount = ref('')
-const walletHistorySelectRef = ref<any>(null)
 const walletPresent = ref(false)
 const walletLoginSubmitting = ref(false)
 const loggedIn = ref(isLoggedIn())
-let stopAccountWatch: (() => void) | null = null
 let stopWalletProviderWatch: (() => void) | null = null
 
 // 回收站相关状态
@@ -1734,8 +1730,7 @@ async function handleWalletLogin() {
   }
   walletLoginSubmitting.value = true
   try {
-    const preferred = selectedWalletAccount.value.trim()
-    await loginWithWallet(preferred || undefined)
+    await loginWithWallet()
     window.location.reload()
   } catch (error: any) {
     showError(error?.message || '钱包登录失败')
@@ -1866,26 +1861,6 @@ function handlePassportStorage(event: StorageEvent) {
 function handlePassportMessage(event: MessageEvent) {
   if (event.origin !== window.location.origin) return
   handlePassportCallbackEvent(event.data)
-}
-
-function formatLoginHistoryAddress(address?: string): string {
-  const trimmed = String(address || '').trim()
-  if (!trimmed) return '-'
-  if (trimmed.length <= 15) return trimmed
-  return `${trimmed.slice(0, 6)}...${trimmed.slice(-6)}`
-}
-
-async function handleWalletHistoryVisibleChange(visible: boolean) {
-  if (!visible) return
-  await nextTick()
-  const selectEl = walletHistorySelectRef.value?.$el as HTMLElement | undefined
-  const selectWidth = selectEl?.offsetWidth
-  if (!selectWidth) return
-  const poppers = Array.from(document.querySelectorAll<HTMLElement>('.login-history-select-popper'))
-  const popper = poppers.find((item) => item.offsetParent !== null) ?? poppers[poppers.length - 1]
-  if (!popper) return
-  popper.style.width = `${selectWidth}px`
-  popper.style.minWidth = `${selectWidth}px`
 }
 
 // 获取文件列表 (WebDAV PROPFIND)
@@ -5730,23 +5705,11 @@ onBeforeUnmount(() => {
   window.removeEventListener(AUTH_CHANGED_EVENT, handleAuthChanged as EventListener)
 })
 
-function syncWalletHistory(next?: string) {
-  walletHistory.value = getAccountHistory()
-  if (next) {
-    selectedWalletAccount.value = next
-    return
-  }
-  if (!selectedWalletAccount.value && walletHistory.value.length > 0) {
-    selectedWalletAccount.value = walletHistory.value[0]
-  }
-}
-
 onMounted(() => {
   stopWalletProviderWatch = watchWalletProvider((present) => {
     walletPresent.value = present
   })
   void loadCipherSuiteOptions()
-  syncWalletHistory()
   if (!loggedIn.value) {
     void refreshPassportLogin()
   }
@@ -5756,11 +5719,6 @@ onMounted(() => {
     passportBroadcastChannel = new BroadcastChannel('warehouse-passport-login')
     passportBroadcastChannel.onmessage = event => handlePassportCallbackEvent(event.data)
   }
-  void (async () => {
-    stopAccountWatch = await watchWalletAccounts(({ account }) => {
-      syncWalletHistory(account || undefined)
-    })
-  })()
 })
 
 onBeforeUnmount(() => {
@@ -5771,7 +5729,6 @@ onBeforeUnmount(() => {
   passportBroadcastChannel = null
   clearPassportTimer()
   stopWalletProviderWatch?.()
-  stopAccountWatch?.()
 })
 </script>
 
@@ -5818,34 +5775,7 @@ onBeforeUnmount(() => {
                 <div class="login-wallet-icon">
                   <el-icon><Connection /></el-icon>
                 </div>
-                <div v-if="walletPresent && walletHistory.length" class="login-wallet-row">
-                  <el-select
-                    ref="walletHistorySelectRef"
-                    v-model="selectedWalletAccount"
-                    placeholder="历史账户（可选）"
-                    class="login-history-select"
-                    popper-class="login-history-select-popper"
-                    :disabled="walletLoginSubmitting"
-                    @visible-change="handleWalletHistoryVisibleChange"
-                  >
-                    <el-option
-                      v-for="accountItem in walletHistory"
-                      :key="accountItem"
-                      :value="accountItem"
-                      :label="formatLoginHistoryAddress(accountItem)"
-                    >
-                      <span class="login-history-option mono">{{ formatLoginHistoryAddress(accountItem) }}</span>
-                    </el-option>
-                  </el-select>
-                  <el-button
-                    type="primary"
-                    class="login-main-btn login-wallet-btn login-wallet-action-btn"
-                    @click="handleWalletLogin"
-                  >
-                    {{ walletLoginSubmitting ? '查看钱包弹窗' : '钱包登录' }}
-                  </el-button>
-                </div>
-                <template v-else-if="walletPresent">
+                <template v-if="walletPresent">
                   <el-button
                     type="primary"
                     class="login-main-btn login-wallet-btn"
@@ -7509,50 +7439,6 @@ onBeforeUnmount(() => {
   align-self: stretch;
 }
 
-.login-history-select {
-  width: 100%;
-}
-
-.login-wallet-row {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.login-wallet-row .login-history-select {
-  flex: 1;
-  min-width: 0;
-}
-
-.login-wallet-action-btn {
-  width: 132px;
-  flex: none;
-}
-
-.login-history-option {
-  display: block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-:deep(.login-history-select .el-select__wrapper) {
-  min-height: 44px;
-  border-radius: 8px;
-  box-shadow: inset 0 0 0 1px #cbd5e1;
-  transition: box-shadow 0.16s ease;
-}
-
-:deep(.login-history-select .el-select__wrapper:hover) {
-  box-shadow: inset 0 0 0 1.5px #6a97dd;
-}
-
-:deep(.login-history-select .el-select__wrapper.is-focused) {
-  box-shadow: inset 0 0 0 2px #3f7fe0;
-}
-
 :deep(.el-button.login-main-btn),
 :deep(.el-button.login-submit) {
   border: 0 !important;
@@ -7640,14 +7526,6 @@ onBeforeUnmount(() => {
     border: 0;
     border-radius: 0;
     box-shadow: none;
-  }
-
-  .login-wallet-row {
-    flex-direction: column;
-  }
-
-  .login-wallet-action-btn {
-    width: 100%;
   }
 
   .login-qrcode-frame {
