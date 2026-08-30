@@ -18,6 +18,7 @@ type Grant struct {
 	Permissions string
 	ExpiresAt   *time.Time
 	Status      string
+	CreatedAt   time.Time
 }
 
 // Resource identifies the V3 object on which grants are evaluated.

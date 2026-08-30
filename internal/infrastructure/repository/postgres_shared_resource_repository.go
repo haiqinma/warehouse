@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/yeying-community/warehouse/internal/domain/sharegrant"
@@ -50,7 +51,7 @@ func (r *PostgresSharedResourceGrantRepository) ListReceivedResources(ctx contex
 	const query = `SELECT r.id,r.owner_user_id,u.username,r.normalized_path,r.is_dir,g.id,g.permissions,g.expires_at,g.status,g.created_at
 		FROM internal_shared_resources r JOIN users u ON u.id=r.owner_user_id JOIN internal_share_grants g ON g.resource_id=r.id
 		WHERE r.owner_user_id<>$1 AND EXISTS (SELECT 1 FROM internal_share_audiences a WHERE a.grant_id=g.id AND (a.audience_type='all_users' OR (a.audience_type='user' AND a.source_group_id IS NULL AND a.target_user_id=$1) OR EXISTS (SELECT 1 FROM users tu JOIN group_members gm ON gm.group_id=a.source_group_id AND gm.status='active' AND TRIM(COALESCE(tu.wallet_address,''))<>'' AND LOWER(gm.wallet_address)=LOWER(tu.wallet_address) WHERE tu.id=$1)))
-		ORDER BY r.created_at DESC,g.created_at ASC`
+		ORDER BY g.created_at DESC,r.created_at DESC`
 	rows, err := r.db.QueryContext(ctx, query, targetUserID)
 	if err != nil {
 		return nil, fmt.Errorf("query received shared resources: %w", err)
@@ -63,7 +64,7 @@ func (r *PostgresSharedResourceGrantRepository) ListReceivedResources(ctx contex
 		var resource sharegrant.ReceivedResource
 		var grant sharegrant.Grant
 		var expiry sql.NullTime
-		if err := rows.Scan(&resource.ID, &resource.OwnerUserID, &resource.OwnerUsername, &resource.NormalizedPath, &resource.IsDir, &grant.ID, &grant.Permissions, &expiry, &grant.Status, &resource.CreatedAt); err != nil {
+		if err := rows.Scan(&resource.ID, &resource.OwnerUserID, &resource.OwnerUsername, &resource.NormalizedPath, &resource.IsDir, &grant.ID, &grant.Permissions, &expiry, &grant.Status, &grant.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan received shared resource: %w", err)
 		}
 		if expiry.Valid {
@@ -91,10 +92,21 @@ func (r *PostgresSharedResourceGrantRepository) ListReceivedResources(ctx contex
 		if len(effective) == 0 || !sharegrant.Allows(effective, "read", now) {
 			continue
 		}
+		for _, grant := range effective {
+			if grant.CreatedAt.After(item.CreatedAt) {
+				item.CreatedAt = grant.CreatedAt
+			}
+		}
 		item.GrantCount = len(effective)
 		item.Permissions = sharegrant.EffectivePermissions(effective, now).String()
 		result = append(result, *item)
 	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].NormalizedPath < result[j].NormalizedPath
+		}
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
 	return result, nil
 }
 

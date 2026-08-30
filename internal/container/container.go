@@ -87,6 +87,7 @@ type Container struct {
 	HealthHandler              *handler.HealthHandler
 	InternalReplicationHandler *handler.InternalReplicationHandler
 	Web3Handler                *handler.Web3Handler
+	PassportHandler            *handler.PassportHandler
 	EmailAuthHandler           *handler.EmailAuthHandler
 	AssetsHandler              *handler.AssetsHandler
 	AssetObjectHandler         *handler.AssetObjectHandler
@@ -503,6 +504,13 @@ func (c *Container) initHandlers() error {
 			c.Logger,
 			c.Config.Web3.AutoCreateOnChallenge,
 		)
+		c.PassportHandler = handler.NewPassportHandler(
+			c.Web3Auth,
+			c.UserRepository,
+			c.AssetSpaceManager,
+			c.Config.Passport,
+			c.Logger,
+		)
 	}
 
 	// 邮箱验证码登录处理器
@@ -585,6 +593,7 @@ func (c *Container) initHTTP() error {
 		c.HealthHandler,
 		c.InternalReplicationHandler,
 		c.Web3Handler,
+		c.PassportHandler,
 		c.EmailAuthHandler,
 		c.AssetsHandler,
 		c.AssetObjectHandler,
