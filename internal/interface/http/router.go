@@ -111,6 +111,8 @@ func (r *Router) Setup() http.Handler {
 	mux.HandleFunc("/api/v1/public/auth/logout", r.web3Handler.HandleLogout)
 	mux.HandleFunc("/api/v1/public/auth/password/login", r.web3Handler.HandlePasswordLogin)
 	if r.passportHandler != nil {
+		mux.HandleFunc("/api/v1/public/auth/identity/login/session", r.passportHandler.HandleIdentityLoginSession)
+		mux.HandleFunc("/api/v1/public/auth/identity/login/verify", r.passportHandler.HandleIdentityLoginVerify)
 		mux.HandleFunc("/api/v1/public/auth/passport/session", r.passportHandler.HandleSession)
 		mux.HandleFunc("/api/v1/public/auth/passport/status", r.passportHandler.HandleStatus)
 		mux.HandleFunc("/api/v1/public/auth/passport/callback", r.passportHandler.HandleCallback)

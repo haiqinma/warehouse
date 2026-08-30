@@ -1,7 +1,7 @@
 import {
   getProvider,
   requestAccounts,
-  loginWithChallenge,
+  loginWithWalletIdentity,
   logout as sdkLogout,
   clearAccessToken,
   getAccessToken,
@@ -313,34 +313,15 @@ export async function loginWithWallet(preferredAccount?: string): Promise<void> 
     throw new Error('未检测到钱包')
   }
 
-  const accounts = await requestAccounts({ provider })
-  let address = accounts[0]
-  if (preferredAccount) {
-    const normalized = normalizeAddress(preferredAccount)
-    const match = accounts.find(item => normalizeAddress(item) === normalized)
-    if (!match) {
-      throw new Error('请在钱包中切换到选中的账户')
-    }
-    address = match
-  }
-  if (!address) return
-
-  localStorage.setItem('currentAccount', address)
-  localStorage.setItem('walletAddress', address)
-  rememberAccount(address)
-
   try {
-    const result = await loginWithChallenge({
+    const result = await loginWithWalletIdentity({
       provider,
-      address,
-      baseUrl: AUTH_BASE
+      baseUrl: AUTH_BASE,
+      credentials: 'include',
+      storeToken: false,
+      ...(preferredAccount ? { address: normalizeAddress(preferredAccount) } : {})
     })
-
-    if (result.token) {
-      applyAccessToken(result.token)
-      scheduleTokenRefresh(result.token)
-    }
-    window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT))
+    applyLoginResult(result.response || {}, result.walletAddress || preferredAccount || '')
   } catch (error) {
     throw new Error(formatWalletLoginError(error))
   }

@@ -114,10 +114,10 @@ web3:
 # Environment overrides: WEBDAV_PASSPORT_ENABLED, WEBDAV_PASSPORT_NODE_URL,
 # WEBDAV_PASSPORT_CLIENT_ID, WEBDAV_PASSPORT_SCOPE, WEBDAV_PASSPORT_SESSION_TTL.
 passport:
-  enabled: false
+  enabled: true
   node_url: "https://passport.yeying.pub"
   client_id: "warehouse"
-  scope: "identity.basic identity.email identity.wallet identity.avatar"
+  scope: "identity.basic identity.username identity.email identity.wallet identity.avatar"
   session_ttl: 5m
 
 # Email Login Configuration

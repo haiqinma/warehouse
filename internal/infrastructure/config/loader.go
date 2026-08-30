@@ -599,7 +599,7 @@ func (l *Loader) validatePassport(config *Config) error {
 	passport.ClientID = strings.TrimSpace(passport.ClientID)
 	passport.Scope = strings.TrimSpace(passport.Scope)
 	if passport.Scope == "" {
-		passport.Scope = "identity.basic identity.email identity.wallet identity.avatar"
+		passport.Scope = "identity.basic identity.username identity.email identity.wallet identity.avatar"
 	}
 	if passport.SessionTTL <= 0 {
 		passport.SessionTTL = 5 * time.Minute

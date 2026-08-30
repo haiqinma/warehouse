@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -109,6 +110,105 @@ func NewPassportHandler(
 		client:            &http.Client{Timeout: 15 * time.Second},
 		sessions:          newPassportSessionStore(),
 	}
+}
+
+// HandleIdentityLoginSession creates the server-bound challenge used by
+// web3-bs loginWithWalletIdentity.
+func (h *PassportHandler) HandleIdentityLoginSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.sendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST method is allowed")
+		return
+	}
+	if !h.config.Enabled {
+		h.sendErrorWithData(w, http.StatusServiceUnavailable, "WALLET_IDENTITY_NOT_CONFIGURED", "Wallet Identity login is not configured", map[string]string{"code": "wallet_identity_not_configured"})
+		return
+	}
+
+	sessionID := uuid.NewString()
+	codeVerifier, err := randomBase64URL(64)
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to create login session")
+		return
+	}
+	challenge := sha256.Sum256([]byte(codeVerifier))
+	redirectURI := h.callbackURL(r)
+	requestedScopes := passportScopes(h.config.Scope)
+	result, err := h.nodeRequest(r.Context(), http.MethodPost, "/api/v1/public/identity/authorize/request", map[string]any{
+		"appId": h.config.ClientID, "redirectUri": redirectURI, "state": sessionID,
+		"codeChallenge": base64.RawURLEncoding.EncodeToString(challenge[:]), "codeChallengeMethod": "S256",
+		"scopes": requestedScopes, "requestTtlMs": int64(h.sessionTTL() / time.Millisecond),
+	})
+	if err != nil {
+		h.logger.Warn("wallet identity session request failed", zap.Error(err))
+		h.sendErrorWithData(w, http.StatusBadGateway, "WALLET_IDENTITY_UNREACHABLE", "Unable to reach identity service", map[string]string{"code": "wallet_identity_unreachable"})
+		return
+	}
+	if !result.OK {
+		h.sendNodeError(w, result, "Identity service returned an error")
+		return
+	}
+	requestID := strings.TrimSpace(firstString(result.Data, "requestId", "request_id"))
+	audience := strings.TrimSpace(firstString(result.Data, "audience"))
+	nonce := strings.TrimSpace(firstString(result.Data, "nonce"))
+	if requestID == "" || audience == "" || nonce == "" {
+		h.sendErrorWithData(w, http.StatusBadGateway, "WALLET_IDENTITY_SESSION_INVALID", "Identity service response is invalid", map[string]string{"code": "wallet_identity_session_invalid"})
+		return
+	}
+	expiresAt := time.Now().Add(h.sessionTTL())
+	h.sessions.Put(sessionID, passportSession{RequestID: requestID, CodeVerifier: codeVerifier, RedirectURI: redirectURI, AppID: h.config.ClientID, Status: "pending", CreatedAt: time.Now(), ExpiresAt: expiresAt})
+	h.sendSDKSuccess(w, map[string]any{
+		"session_id": sessionID, "request_id": requestID, "audience": audience, "nonce": nonce,
+		"scopes": requestedScopes, "issuerEndpoint": h.config.NodeURL, "expires_at": expiresAt.Format(time.RFC3339),
+	})
+}
+
+// HandleIdentityLoginVerify verifies the wallet presentation through the
+// configured identity issuer and exchanges the one-time authorization code.
+func (h *PassportHandler) HandleIdentityLoginVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.sendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST method is allowed")
+		return
+	}
+	var req struct {
+		SessionID    string         `json:"session_id"`
+		Presentation map[string]any `json:"presentation"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.SessionID) == "" || req.Presentation == nil {
+		h.sendErrorWithData(w, http.StatusBadRequest, "IDENTITY_PRESENTATION_REQUIRED", "Wallet Identity presentation is required", map[string]string{"code": "identity_presentation_required"})
+		return
+	}
+	session, ok := h.sessions.Get(strings.TrimSpace(req.SessionID), time.Now())
+	if !ok {
+		h.sendErrorWithData(w, http.StatusGone, "WALLET_IDENTITY_SESSION_INVALID", "Wallet Identity login session expired", map[string]string{"code": "wallet_identity_session_invalid"})
+		return
+	}
+	approved, err := h.nodeRequest(r.Context(), http.MethodPost, "/api/v1/public/identity/authorize/approve", map[string]any{"requestId": session.RequestID, "presentation": req.Presentation})
+	if err != nil {
+		h.sendErrorWithData(w, http.StatusBadGateway, "WALLET_IDENTITY_UNREACHABLE", "Unable to verify Wallet Identity presentation", map[string]string{"code": "wallet_identity_unreachable"})
+		return
+	}
+	if !approved.OK {
+		h.sendNodeError(w, approved, "Wallet Identity presentation is invalid")
+		return
+	}
+	code := strings.TrimSpace(firstString(approved.Data, "authorizationCode", "authorization_code", "code"))
+	if code == "" {
+		h.sendErrorWithData(w, http.StatusBadGateway, "WALLET_IDENTITY_VERIFY_INVALID", "Identity service did not return an authorization code", map[string]string{"code": "wallet_identity_verify_invalid"})
+		return
+	}
+	result, err := h.nodeRequest(r.Context(), http.MethodPost, "/api/v1/public/identity/authorize/exchange", map[string]any{
+		"code": code, "appId": session.AppID, "redirectUri": session.RedirectURI, "codeVerifier": session.CodeVerifier,
+	})
+	if err != nil {
+		h.sendErrorWithData(w, http.StatusBadGateway, "WALLET_IDENTITY_UNREACHABLE", "Unable to exchange Wallet Identity authorization", map[string]string{"code": "wallet_identity_unreachable"})
+		return
+	}
+	if !result.OK {
+		h.sessions.Delete(req.SessionID)
+		h.sendNodeError(w, result, "Wallet Identity authorization exchange failed")
+		return
+	}
+	h.completeIdentityLogin(w, r, req.SessionID, result.Data)
 }
 
 func (h *PassportHandler) HandleSession(w http.ResponseWriter, r *http.Request) {
@@ -287,8 +387,15 @@ func (h *PassportHandler) completeLogin(w http.ResponseWriter, r *http.Request, 
 		h.sendErrorWithData(w, http.StatusBadGateway, "PASSPORT_WALLET_MISSING", "Passport did not return a valid wallet address", map[string]string{"code": "passport_wallet_missing"})
 		return
 	}
+	accountAddress := extractCredentialSubjectString(result.Data, "WalletAccountCredential", "address")
+	accountChain := extractCredentialSubjectString(result.Data, "WalletAccountCredential", "chainKey")
+	if !isPlainWalletAddress(accountAddress) || !strings.EqualFold(accountAddress, address) || strings.TrimSpace(accountChain) == "" {
+		h.sessions.Delete(sessionID)
+		h.sendErrorWithData(w, http.StatusBadGateway, "PASSPORT_WALLET_CREDENTIAL_INVALID", "Passport returned an invalid wallet account credential", map[string]string{"code": "passport_wallet_credential_invalid"})
+		return
+	}
 
-	currentUser, err := h.web3Auth.EnsureUserByWallet(r.Context(), address, true)
+	currentUser, err := h.ensurePassportUser(r.Context(), address, result.Data)
 	if err != nil {
 		h.logger.Error("failed to ensure passport user", zap.String("address", address), zap.Error(err))
 		h.sendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to process passport user")
@@ -326,11 +433,50 @@ func (h *PassportHandler) completeLogin(w http.ResponseWriter, r *http.Request, 
 	})
 }
 
+func (h *PassportHandler) completeIdentityLogin(w http.ResponseWriter, r *http.Request, sessionID string, data map[string]any) {
+	address := strings.ToLower(strings.TrimSpace(firstString(data, "walletAddress", "wallet_address", "address")))
+	accountAddress := strings.ToLower(strings.TrimSpace(extractCredentialSubjectString(data, "WalletAccountCredential", "address")))
+	accountChain := strings.TrimSpace(extractCredentialSubjectString(data, "WalletAccountCredential", "chainKey"))
+	if !isPlainWalletAddress(address) || !isPlainWalletAddress(accountAddress) || address != accountAddress || accountChain == "" {
+		h.sessions.Delete(sessionID)
+		h.sendErrorWithData(w, http.StatusBadGateway, "WALLET_IDENTITY_ACCOUNT_INVALID", "Wallet Identity did not return a valid wallet account credential", map[string]string{"code": "wallet_identity_account_invalid"})
+		return
+	}
+	currentUser, err := h.ensurePassportUser(r.Context(), address, data)
+	if err != nil {
+		h.logger.Error("failed to ensure wallet identity user", zap.String("address", address), zap.Error(err))
+		h.sendErrorWithData(w, http.StatusConflict, "WALLET_IDENTITY_USER_CONFLICT", "Failed to process Wallet Identity user", map[string]string{"code": "wallet_identity_user_conflict"})
+		return
+	}
+	h.applyPassportEmail(r.Context(), currentUser, data)
+	if err := h.ensureAssetSpaces(currentUser); err != nil {
+		h.sendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to initialize user spaces")
+		return
+	}
+	accessToken, err := h.web3Auth.GenerateAccessToken(address)
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, "TOKEN_GENERATION_FAILED", "Failed to generate token")
+		return
+	}
+	refreshToken, err := h.web3Auth.GenerateRefreshToken(address)
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, "REFRESH_TOKEN_FAILED", "Failed to generate refresh token")
+		return
+	}
+	h.sessions.Delete(sessionID)
+	setRefreshCookie(w, r, refreshToken.Value, refreshToken.ExpiresAt)
+	h.sendSDKSuccess(w, map[string]any{
+		"address": address, "walletAddress": address, "did": firstString(data, "did"),
+		"username": currentUser.Username, "email": currentUser.Email,
+		"token": accessToken.Value, "expiresAt": accessToken.ExpiresAt.UnixMilli(), "refreshExpiresAt": refreshToken.ExpiresAt.UnixMilli(),
+	})
+}
+
 func (h *PassportHandler) applyPassportEmail(ctx context.Context, currentUser *user.User, data map[string]any) {
 	if currentUser == nil || strings.TrimSpace(currentUser.Email) != "" {
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(firstString(data, "email")))
+	email := strings.ToLower(strings.TrimSpace(extractCredentialSubjectString(data, "EmailCredential", "email")))
 	if email == "" || !user.IsValidEmail(email) {
 		return
 	}
@@ -338,6 +484,88 @@ func (h *PassportHandler) applyPassportEmail(ctx context.Context, currentUser *u
 	if err := h.userRepo.Save(ctx, currentUser); err != nil {
 		h.logger.Warn("failed to apply passport email claim", zap.String("email", email), zap.Error(err))
 	}
+}
+
+func (h *PassportHandler) ensurePassportUser(ctx context.Context, address string, data map[string]any) (*user.User, error) {
+	currentUser, err := h.userRepo.FindByWalletAddress(ctx, address)
+	if err == nil {
+		return currentUser, nil
+	}
+	if !errors.Is(err, user.ErrUserNotFound) {
+		return nil, err
+	}
+
+	username := strings.TrimSpace(extractCredentialSubjectString(data, "UsernameCredential", "username"))
+	if username == "" {
+		return nil, fmt.Errorf("passport username credential missing")
+	}
+	if !isSafePassportUsername(username) {
+		return nil, fmt.Errorf("passport username is invalid")
+	}
+	email := strings.ToLower(strings.TrimSpace(extractCredentialSubjectString(data, "EmailCredential", "email")))
+
+	currentUser = user.NewUser(username, username)
+	if err := currentUser.SetWalletAddress(address); err != nil {
+		return nil, err
+	}
+	if email != "" && user.IsValidEmail(email) {
+		_ = currentUser.SetEmail(email)
+	}
+	currentUser.Permissions = user.ParsePermissions("CRUD")
+	_ = currentUser.SetQuota(1073741824)
+
+	if err := h.userRepo.Save(ctx, currentUser); err != nil {
+		if errors.Is(err, user.ErrDuplicateUsername) {
+			return nil, fmt.Errorf("passport username already exists")
+		}
+		return nil, err
+	}
+	return currentUser, nil
+}
+
+func extractCredentialSubjectString(data map[string]any, credentialType string, keys ...string) string {
+	credentials, ok := data["credentials"].([]any)
+	if !ok {
+		return ""
+	}
+	for _, item := range credentials {
+		credential, ok := item.(map[string]any)
+		if !ok || firstString(credential, "type") != credentialType {
+			continue
+		}
+		if value := jwtCredentialSubjectString(firstString(credential, "credential"), keys...); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func jwtCredentialSubjectString(token string, keys ...string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		payload, err = base64.URLEncoding.DecodeString(parts[1])
+	}
+	if err != nil {
+		return ""
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	vc, _ := claims["vc"].(map[string]any)
+	subject, _ := vc["credentialSubject"].(map[string]any)
+	return firstString(subject, keys...)
+}
+
+func isSafePassportUsername(username string) bool {
+	if len(username) < 3 || len(username) > 64 {
+		return false
+	}
+	return regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`).MatchString(username)
 }
 
 func (h *PassportHandler) ensureAssetSpaces(u *user.User) error {
@@ -503,11 +731,12 @@ func randomBase64URL(size int) (string, error) {
 
 func passportScopes(scope string) []string {
 	aliases := map[string]string{
-		"openid":  "identity.basic",
-		"profile": "identity.email",
-		"email":   "identity.email",
-		"wallet":  "identity.wallet",
-		"avatar":  "identity.avatar",
+		"openid":   "identity.basic",
+		"profile":  "identity.username",
+		"username": "identity.username",
+		"email":    "identity.email",
+		"wallet":   "identity.wallet",
+		"avatar":   "identity.avatar",
 	}
 	seen := map[string]struct{}{}
 	var result []string

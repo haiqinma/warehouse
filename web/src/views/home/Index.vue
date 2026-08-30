@@ -2,7 +2,7 @@
 import { ref, onMounted, onBeforeUnmount, computed, watch, defineAsyncComponent } from 'vue'
 import { storeToRefs } from 'pinia'
 import QRCode from 'qrcode'
-import { ArrowLeft, ArrowRight, ArrowUp, Connection, Delete, Expand, Fold, Folder, FolderAdd, FolderOpened, Grid, Key, Refresh, Upload, DocumentCopy, Share, Search, MoreFilled, Notebook, User, Lock, Unlock } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, ArrowUp, Delete, Expand, Fold, Folder, FolderAdd, FolderOpened, Grid, Refresh, Upload, DocumentCopy, Share, Search, MoreFilled, Notebook, User, Lock, Unlock, Wallet } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { getSupportedCipherSuites, type CipherSuiteInfo } from '@yeying-community/web3-bs'
 import { quotaApi, userApi, recycleApi, shareApi, directShareApi, assetsApi, webdavAccessKeyApi, s3CredentialApi, adminUserApi, type RecycleItem, type ShareItem, type DirectShareItem, type ReceivedSharedResource, type AssetSpaceInfo, type ShareExpiryUnit, type ShareMode, type AccessKeyPermission, type WebDAVAccessKeyItem, type CreateWebDAVAccessKeyResult, type S3CredentialItem, type CreateS3CredentialResult, type AdminUserItem, type GroupMember } from '@/api'
@@ -57,7 +57,8 @@ const userInfo = ref<{
   updated_at?: string
   has_password?: boolean
 } | null>(null)
-const loginMode = ref<'passport' | 'wallet'>('passport')
+type LoginMode = 'passport' | 'wallet'
+const loginMode = ref<LoginMode>('wallet')
 const passportLoading = ref(false)
 const passportPolling = ref(false)
 const passportSessionId = ref('')
@@ -350,6 +351,22 @@ const userProfile = computed(() => {
   const createdAt = userInfo.value?.created_at || getUserCreatedAt()
   const hasPassword = Boolean(userInfo.value?.has_password)
   return { username, walletAddress, walletName, permissions, createdAt, hasPassword }
+})
+const nextLoginMode = computed<LoginMode>(() => {
+  if (loginMode.value === 'passport') return 'wallet'
+  return 'passport'
+})
+const nextLoginModeLabel = computed(() => {
+  if (nextLoginMode.value === 'wallet') return '钱包登录'
+  return '通行证登录'
+})
+const nextLoginModeIcon = computed(() => {
+  if (nextLoginMode.value === 'wallet') return Wallet
+  return Grid
+})
+const loginSubtitle = computed(() => {
+  if (loginMode.value === 'passport') return '使用通行证完成身份验证后进入 Warehouse。'
+  return '使用夜莺钱包授权钱包身份，Warehouse 将读取已验证邮箱后进入工作区。'
 })
 const showSearch = computed(() => !showQuotaManage.value && !showGroupView.value && !showHelp.value)
 const showListHeader = computed(() => !showQuotaManage.value && !showGroupView.value && !showHelp.value)
@@ -1826,8 +1843,11 @@ async function checkPassportStatus() {
   }
 }
 
-function switchLoginMode(mode: 'passport' | 'wallet') {
+function switchLoginMode(mode: LoginMode) {
   loginMode.value = mode
+  if (mode !== 'passport') {
+    clearPassportTimer()
+  }
   if (mode === 'passport' && !passportSessionId.value && !passportLoading.value) {
     void refreshPassportLogin()
   }
@@ -5710,7 +5730,7 @@ onMounted(() => {
     walletPresent.value = present
   })
   void loadCipherSuiteOptions()
-  if (!loggedIn.value) {
+  if (!loggedIn.value && loginMode.value === 'passport') {
     void refreshPassportLogin()
   }
   window.addEventListener('storage', handlePassportStorage)
@@ -5738,21 +5758,20 @@ onBeforeUnmount(() => {
     <div v-if="!loggedIn" class="login-page">
       <div class="login-floating-container">
         <div class="login-hero">
-          <div class="login-card">
+          <div class="login-card" :class="{ 'is-wallet-mode': loginMode === 'wallet', 'is-passport-mode': loginMode === 'passport' }">
             <div class="login-card-switch">
-              <el-tooltip :content="loginMode === 'passport' ? '钱包登录' : '通行证登录'" placement="left">
-                <el-button class="login-mode-button" circle @click="switchLoginMode(loginMode === 'passport' ? 'wallet' : 'passport')">
+              <el-tooltip :content="nextLoginModeLabel" placement="left">
+                <el-button class="login-mode-button" :aria-label="nextLoginModeLabel" @click="switchLoginMode(nextLoginMode)">
                   <el-icon>
-                    <component :is="loginMode === 'passport' ? Connection : Key" />
+                    <component :is="nextLoginModeIcon" />
                   </el-icon>
                 </el-button>
               </el-tooltip>
             </div>
             <div class="login-brand">
-              <img src="/logo.svg" alt="资产仓库" class="login-brand-logo" />
               <div>
-                <h1>资产仓库</h1>
-                <p>{{ loginMode === 'passport' ? '使用夜莺通行证扫码登录' : '连接钱包后进入资产仓库' }}</p>
+                <h1>Warehouse</h1>
+                <p>{{ loginSubtitle }}</p>
               </div>
             </div>
 
@@ -5760,21 +5779,17 @@ onBeforeUnmount(() => {
               <div v-if="loginMode === 'passport'" key="passport" class="login-passport-panel">
                 <button type="button" class="login-qrcode-frame" :disabled="passportLoading" @click="refreshPassportLogin">
                   <img v-if="passportQrcodeImage" :src="passportQrcodeImage" alt="通行证登录二维码" />
-                  <el-icon v-else class="login-qrcode-placeholder" :class="{ 'is-loading': passportLoading }"><Refresh /></el-icon>
+                  <span v-else class="login-qrcode-placeholder">{{ passportLoading ? '加载中' : '刷新二维码' }}</span>
                 </button>
-                <div class="login-status-line">
-                  {{ passportStatusText || '请使用手机相机或夜莺钱包扫码确认登录' }}
+                <div v-if="passportStatusText" class="login-status-line">
+                  {{ passportStatusText }}
                 </div>
                 <div class="login-passport-actions">
                   <el-button text @click="openPassportAuthorize">无法扫码？使用本机通行证登录</el-button>
-                  <el-button text @click="refreshPassportLogin">刷新二维码</el-button>
                 </div>
               </div>
 
               <div v-else key="wallet" class="login-wallet-panel">
-                <div class="login-wallet-icon">
-                  <el-icon><Connection /></el-icon>
-                </div>
                 <template v-if="walletPresent">
                   <el-button
                     type="primary"
@@ -7283,7 +7298,7 @@ onBeforeUnmount(() => {
 }
 
 .login-floating-container {
-  width: min(520px, 100%);
+  width: min(480px, 100%);
 }
 
 .login-hero {
@@ -7306,31 +7321,54 @@ onBeforeUnmount(() => {
 
 .login-card {
   position: relative;
+  overflow: hidden;
   width: 100%;
-  min-height: 510px;
+  min-height: 470px;
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  padding: 36px 40px 30px;
+  padding: 34px 40px 28px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 24px;
+  gap: 22px;
   box-shadow: 0 20px 60px rgba(15, 23, 42, 0.08);
+}
+
+.login-card.is-wallet-mode {
+  min-height: 0;
+  padding-top: 32px;
+  padding-bottom: 26px;
+  gap: 20px;
 }
 
 .login-card-switch {
   position: absolute;
-  top: 18px;
-  right: 18px;
+  top: 0;
+  right: 0;
 }
 
 .login-mode-button {
-  width: 42px;
-  height: 42px;
-  color: #2563eb;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
+  width: 88px;
+  min-width: 88px;
+  height: 88px;
+  padding: 12px 10px 40px 40px;
+  color: #ffffff;
+  background: #9dcc86;
+  border: 0;
+  border-radius: 0;
+  clip-path: polygon(100% 0, 100% 100%, 0 0);
+  box-shadow: none;
+}
+
+.login-mode-button:hover,
+.login-mode-button:focus {
+  color: #ffffff;
+  background: #8cc474;
+}
+
+.login-mode-button :deep(.el-icon) {
+  font-size: 30px;
 }
 
 .login-brand {
@@ -7341,15 +7379,9 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
-.login-brand-logo {
-  width: 72px;
-  height: 72px;
-  object-fit: contain;
-}
-
 .login-brand h1 {
   margin: 0;
-  font-size: 26px;
+  font-size: 25px;
   line-height: 1.25;
   font-weight: 650;
   color: #111827;
@@ -7364,11 +7396,15 @@ onBeforeUnmount(() => {
 
 .login-passport-panel,
 .login-wallet-panel {
-  width: 100%;
+  width: min(360px, 100%);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 18px;
+}
+
+.login-wallet-panel {
+  margin-top: 2px;
 }
 
 .login-qrcode-frame {
@@ -7395,12 +7431,8 @@ onBeforeUnmount(() => {
 }
 
 .login-qrcode-placeholder {
-  font-size: 34px;
+  font-size: 14px;
   color: #94a3b8;
-}
-
-.login-qrcode-placeholder.is-loading {
-  animation: rotating 1s linear infinite;
 }
 
 .login-status-line {
@@ -7417,18 +7449,6 @@ onBeforeUnmount(() => {
   justify-content: center;
   flex-wrap: wrap;
   gap: 6px;
-}
-
-.login-wallet-icon {
-  width: 116px;
-  height: 116px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  color: #2563eb;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  font-size: 42px;
 }
 
 .login-main-btn {
@@ -7481,6 +7501,10 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
+.login-card.is-wallet-mode .login-bottom-link {
+  margin-top: 2px;
+}
+
 .login-bottom-link a,
 .login-passport-actions :deep(.el-button) {
   color: #2563eb;
@@ -7528,6 +7552,12 @@ onBeforeUnmount(() => {
     box-shadow: none;
   }
 
+  .login-card.is-wallet-mode {
+    min-height: 0;
+    padding-top: 28px;
+    padding-bottom: 22px;
+  }
+
   .login-qrcode-frame {
     width: 232px;
     height: 232px;
@@ -7537,6 +7567,7 @@ onBeforeUnmount(() => {
     width: 204px;
     height: 204px;
   }
+
 }
 
 .app-shell {

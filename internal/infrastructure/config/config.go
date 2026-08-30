@@ -276,7 +276,7 @@ func DefaultConfig() *Config {
 		},
 		Passport: PassportConfig{
 			Enabled:    false,
-			Scope:      "identity.basic identity.email identity.wallet identity.avatar",
+			Scope:      "identity.basic identity.username identity.email identity.wallet identity.avatar",
 			SessionTTL: 5 * time.Minute,
 		},
 		Email: EmailConfig{
