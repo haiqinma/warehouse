@@ -1,0 +1,10 @@
+# Whether to back up config files. Valid values: "True" or "False".
+# Default: "True"
+BACKUP_CONF_FLAG="True"
+
+# Backup file prefix. It may be empty. Test environment example: "test-".
+BACKUP_CONF_PREFIX=""
+
+# Backup file suffix.
+# Default: ".conf.tar.gz.gpg"
+BACKUP_CONF_SUFFIX=".conf.tar.gz.gpg"

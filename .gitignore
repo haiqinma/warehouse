@@ -35,6 +35,8 @@ go.work.sum
 
 test_data/
 config.yaml
+scripts/backup.conf
+scripts/.passphrase-file
 build
 output/
 test-results/
