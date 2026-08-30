@@ -7372,11 +7372,16 @@ onBeforeUnmount(() => {
 }
 
 .login-brand {
+  width: min(360px, 100%);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 14px;
   text-align: center;
+}
+
+.login-brand > div {
+  width: 100%;
 }
 
 .login-brand h1 {
