@@ -1,8 +1,10 @@
-# Knowledge 资产接入方案
+# Knowledge 数据接入
 
-本文定义 Warehouse V2 中支撑 Knowledge 的最小资产接入方案。目标是让 Knowledge 可以稳定读取用户原始资产，并把处理后的 manifest 投影、artifact 和反馈资产写回 Warehouse。
+本文定义 Warehouse 支撑 Knowledge 的资产接入方案。Warehouse 保存用户第一手资料和加工产物，Knowledge 负责将资料加工成知识或记忆；目标是让 Knowledge 可以安全、可靠、可校验地读取原始资产，并把 manifest、artifact 和反馈资产写回 Warehouse。
 
 本文只描述 Warehouse 侧的数据面能力，不定义 Agent Run、Context Manifest、Service Principal、Artifact Provenance 的业务模型。这些上层语义由 Knowledge 维护。
+
+Knowledge、Chat、Agent 或第三方 AI 应用应通过稳定的 Warehouse 接口接入，而不是持有用户长期主密码或无限范围存储密钥。当前可用接口为 HTTP 对象 API、WebDAV 和 S3；后续如提供 Tool / MCP 适配层，也必须复用相同的路径范围、权限、配额、checksum 和审计边界。
 
 ## 1. 目标
 

@@ -35,7 +35,7 @@ import ShareTableView from './components/ShareTableView.vue'
 import SharedWithMeTableView from './components/SharedWithMeTableView.vue'
 import RecycleTableView from './components/RecycleTableView.vue'
 import type { CipherSuiteOption, DropEntry, FileItem, UploadItem, UploadTask } from './types'
-import userGuideMarkdown from '../../../../docs/用户使用指南.md?raw'
+import userGuideMarkdown from '../../../../docs/产品概览/用户指南.md?raw'
 
 const FilePreviewDialog = defineAsyncComponent(() => import('./components/FilePreviewDialog.vue'))
 const DAV_PREFIX = normalizeDavPrefix((import.meta as any)?.env?.VITE_WEBDAV_PREFIX || '/dav')

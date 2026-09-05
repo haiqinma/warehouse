@@ -335,15 +335,12 @@ psql -h 127.0.0.1 -p 5432 -U postgres -d warehouse
 ## 相关文档
 
 - 文档入口：[docs/README.md](docs/README.md)
-- 用户使用指南：[docs/用户使用指南.md](docs/用户使用指南.md)
-- 当前架构：[docs/仓库架构V1.md](docs/仓库架构V1.md)
-- V2 已实现架构：[docs/仓库架构V2.md](docs/仓库架构V2.md)
-- 下一版架构：[docs/仓库架构V3.md](docs/仓库架构V3.md)
-- JSON API 契约：[docs/openapi/README.md](docs/openapi/README.md)
-- S3 设计方案：[docs/S3设计方案.md](docs/S3设计方案.md)
-- 部署手册：[docs/部署手册.md](docs/部署手册.md)
-- 多副本方案：[docs/多副本方案.md](docs/多副本方案.md)
-- 额度管理：[docs/额度管理方案.md](docs/额度管理方案.md)
+- 文档总入口：[docs/README.md](docs/README.md)
+- 用户指南：[docs/产品概览/用户指南.md](docs/产品概览/用户指南.md)
+- 当前架构：[docs/产品架构/架构演进/系统架构-V2.md](docs/产品架构/架构演进/系统架构-V2.md)
+- JSON API 契约：[docs/应用集成/OpenAPI/接口契约说明.md](docs/应用集成/OpenAPI/接口契约说明.md)
+- 部署手册：[docs/运维部署/部署手册.md](docs/运维部署/部署手册.md)
+- 运维手册：[docs/运维部署/运维手册.md](docs/运维部署/运维手册.md)
 
 README 只覆盖本地开发、调试和最短启动路径。  
 正式环境部署、Nginx/入口配置、active/standby 上线、验证与回滚，请直接看部署手册。

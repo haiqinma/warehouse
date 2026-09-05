@@ -7,7 +7,7 @@ info:
 
     WebDAV (`/dav/*`) 和独立 S3 Endpoint 是协议适配层，不在本 OpenAPI
     规范中逐操作重复定义。WebDAV 请参阅用户使用指南，S3 请参阅
-    `docs/S3设计方案.md`。
+    `docs/应用集成/S3协议.md`。
 servers:
   - url: https://warehouse.tidukongjian.com
     description: Production
