@@ -258,6 +258,9 @@ func (r *Router) applyMiddlewares(handler http.Handler) http.Handler {
 	recoveryMiddleware := middleware.NewRecoveryMiddleware(r.logger)
 	handler = recoveryMiddleware.Handle(handler)
 
+	// 请求关联标识必须在日志和处理器之前建立
+	handler = middleware.RequestIDMiddleware(handler)
+
 	// 2. 日志中间件
 	loggerMiddleware := middleware.NewLoggerMiddleware(r.logger, r.config.Security.BehindProxy)
 	handler = loggerMiddleware.Handle(handler)
