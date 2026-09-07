@@ -28,14 +28,14 @@ func NewAssetsHandler(assetSpaceManager *assetspace.Manager, logger *zap.Logger)
 // GET /api/v1/public/assets/spaces
 func (h *AssetsHandler) GetSpaces(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		h.sendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET method is allowed")
+		WriteErrorResponse(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET method is allowed")
 		return
 	}
 
 	u, ok := middleware.GetUserFromContext(r.Context())
 	if !ok {
 		h.logger.Error("user not found in context")
-		h.sendError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized")
+		WriteErrorResponse(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized")
 		return
 	}
 
@@ -45,7 +45,7 @@ func (h *AssetsHandler) GetSpaces(w http.ResponseWriter, r *http.Request) {
 				zap.String("username", u.Username),
 				zap.String("directory", u.Directory),
 				zap.Error(err))
-			h.sendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to initialize user spaces")
+			WriteErrorResponse(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to initialize user spaces")
 			return
 		}
 	}
@@ -88,8 +88,4 @@ func (h *AssetsHandler) sendSDKResponse(w http.ResponseWriter, status int, code 
 		Timestamp: time.Now().UnixMilli(),
 	}
 	h.sendJSON(w, status, response)
-}
-
-func (h *AssetsHandler) sendError(w http.ResponseWriter, status int, code, message string) {
-	h.sendSDKResponse(w, status, status, message, nil)
 }
