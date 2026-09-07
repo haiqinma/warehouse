@@ -43,12 +43,12 @@ func NewUploadSessionHandler(uploadService *service.UploadSessionService, logger
 
 func (h *UploadSessionHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		WriteErrorResponse(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 		return
 	}
 	u, ok := middleware.GetUserFromContext(r.Context())
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		WriteErrorResponse(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 		return
 	}
 	var req struct {
@@ -62,7 +62,7 @@ func (h *UploadSessionHandler) HandleCreate(w http.ResponseWriter, r *http.Reque
 		LastModified int64  `json:"lastModified"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		WriteErrorResponse(w, r, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
 	session, err := h.service.Create(r.Context(), u, service.UploadSessionCreateInput{
@@ -87,7 +87,7 @@ func (h *UploadSessionHandler) HandleItem(w http.ResponseWriter, r *http.Request
 	rest := strings.TrimPrefix(r.URL.Path, prefix)
 	parts := strings.Split(strings.Trim(rest, "/"), "/")
 	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
-		http.Error(w, "session id is required", http.StatusBadRequest)
+		WriteErrorResponse(w, r, http.StatusBadRequest, "INVALID_REQUEST", "session id is required")
 		return
 	}
 	id := parts[0]
@@ -101,7 +101,7 @@ func (h *UploadSessionHandler) HandleItem(w http.ResponseWriter, r *http.Request
 	case len(parts) == 3 && parts[1] == "parts" && r.Method == http.MethodPut:
 		partNumber, err := strconv.Atoi(parts[2])
 		if err != nil || partNumber < 1 {
-			http.Error(w, "invalid part number", http.StatusBadRequest)
+			WriteErrorResponse(w, r, http.StatusBadRequest, "INVALID_PART", "invalid part number")
 			return
 		}
 		h.handleUploadPart(w, r, id, partNumber)
