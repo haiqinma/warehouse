@@ -321,7 +321,9 @@ export async function loginWithWallet(preferredAccount?: string): Promise<void> 
       storeToken: false,
       ...(preferredAccount ? { address: normalizeAddress(preferredAccount) } : {})
     })
-    applyLoginResult(result.response || {}, result.walletAddress || preferredAccount || '')
+    const response = result.response as Record<string, any> | undefined
+    const loginData = response?.data && typeof response.data === 'object' ? response.data : response || {}
+    applyLoginResult(loginData, result.walletAddress || preferredAccount || '')
   } catch (error) {
     throw new Error(formatWalletLoginError(error))
   }

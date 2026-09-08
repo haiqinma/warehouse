@@ -508,7 +508,13 @@ func credentialTokens(presentation map[string]any) []string {
 	items, _ := presentation["credentials"].([]any)
 	result := make([]string, 0, len(items))
 	for _, item := range items {
-		if token := strings.TrimSpace(stringValue(item)); token != "" {
+		var token string
+		if credential, ok := item.(map[string]any); ok {
+			token = strings.TrimSpace(stringValue(credential["credential"]))
+		} else {
+			token = strings.TrimSpace(stringValue(item))
+		}
+		if token != "" {
 			result = append(result, token)
 		}
 	}

@@ -37,6 +37,18 @@ func TestIdentityScopesMapsOnlyDocumentedAliases(t *testing.T) {
 	}
 }
 
+func TestCredentialTokensExtractsJWTFromCredentialObjects(t *testing.T) {
+	presentation := map[string]any{"credentials": []any{
+		map[string]any{"type": "WalletAccountCredential", "credential": "jwt-wallet"},
+		map[string]any{"type": "EmailCredential", "credential": "jwt-email"},
+	}}
+	got := credentialTokens(presentation)
+	want := []string{"jwt-wallet", "jwt-email"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("credentialTokens() = %#v, want %#v", got, want)
+	}
+}
+
 func TestIdentityLoginSessionDoesNotRequireNodeService(t *testing.T) {
 	handler := NewIdentityHandler(nil, nil, nil, config.IdentityConfig{
 		Enabled:    true,
