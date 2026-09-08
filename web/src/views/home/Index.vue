@@ -6,7 +6,7 @@ import { ArrowLeft, ArrowRight, ArrowUp, Delete, Expand, Fold, Folder, FolderAdd
 import { ElMessageBox } from 'element-plus'
 import { getSupportedCipherSuites, type CipherSuiteInfo } from '@yeying-community/web3-bs'
 import { quotaApi, userApi, recycleApi, shareApi, directShareApi, assetsApi, webdavAccessKeyApi, s3CredentialApi, adminUserApi, type RecycleItem, type ShareItem, type DirectShareItem, type ReceivedSharedResource, type AssetSpaceInfo, type ShareExpiryUnit, type ShareMode, type AccessKeyPermission, type WebDAVAccessKeyItem, type CreateWebDAVAccessKeyResult, type S3CredentialItem, type CreateS3CredentialResult, type AdminUserItem, type GroupMember } from '@/api'
-import { AUTH_CHANGED_EVENT, isLoggedIn, getUsername, getWalletName, getCurrentAccount, getUserPermissions, getUserCreatedAt, loginWithWallet, focusPendingWalletApproval, createPassportLoginSession, pollPassportLoginStatus, watchWalletProvider } from '@/plugins/auth'
+import { AUTH_CHANGED_EVENT, isLoggedIn, getUsername, getWalletName, getCurrentAccount, getUserPermissions, getUserCreatedAt, loginWithWallet, focusPendingWalletApproval, createIdentityLoginSession, pollIdentityLoginStatus, watchWalletProvider } from '@/plugins/auth'
 import { decryptBlobContent, encryptFileContent, encryptTextContent } from '@/utils/crypto'
 import {
   buildEncryptedDirectoryPasswordContext,
@@ -57,17 +57,17 @@ const userInfo = ref<{
   updated_at?: string
   has_password?: boolean
 } | null>(null)
-type LoginMode = 'passport' | 'wallet'
+type LoginMode = 'identity' | 'wallet'
 const loginMode = ref<LoginMode>('wallet')
-const passportLoading = ref(false)
-const passportPolling = ref(false)
-const passportSessionId = ref('')
-const passportQrcodeUrl = ref('')
-const passportQrcodeImage = ref('')
-const passportStatusText = ref('')
-const passportPollInterval = ref(2)
-let passportTimer: number | null = null
-let passportRequestSeq = 0
+const identityLoading = ref(false)
+const identityPolling = ref(false)
+const identitySessionId = ref('')
+const identityQrcodeUrl = ref('')
+const identityQrcodeImage = ref('')
+const identityStatusText = ref('')
+const identityPollInterval = ref(2)
+let identityTimer: number | null = null
+let identityRequestSeq = 0
 const isMobileViewport = ref(false)
 const walletPresent = ref(false)
 const walletLoginSubmitting = ref(false)
@@ -212,7 +212,7 @@ const previewBlob = ref<Blob | null>(null)
 const previewSourceUrl = ref('')
 const previewReadOnly = ref(false)
 let previewRequestSeq = 0
-let passportBroadcastChannel: BroadcastChannel | null = null
+let identityBroadcastChannel: BroadcastChannel | null = null
 const encryptedDirectoryRoots = ref<string[]>([])
 const encryptedDirectoryMetadata = ref<Record<string, EncryptedDirectoryMetadata>>({})
 const cipherSuiteOptions = ref<CipherSuiteOption[]>([
@@ -353,8 +353,8 @@ const userProfile = computed(() => {
   return { username, walletAddress, walletName, permissions, createdAt, hasPassword }
 })
 const nextLoginMode = computed<LoginMode>(() => {
-  if (loginMode.value === 'passport') return 'wallet'
-  return 'passport'
+  if (loginMode.value === 'identity') return 'wallet'
+  return 'identity'
 })
 const nextLoginModeLabel = computed(() => {
   if (nextLoginMode.value === 'wallet') return '钱包登录'
@@ -365,7 +365,7 @@ const nextLoginModeIcon = computed(() => {
   return Grid
 })
 const loginSubtitle = computed(() => {
-  if (loginMode.value === 'passport') return '使用通行证完成身份验证后进入 Warehouse。'
+  if (loginMode.value === 'identity') return '使用通行证完成身份验证后进入 Warehouse。'
   return '使用夜莺钱包授权钱包身份，Warehouse 将读取已验证邮箱后进入工作区。'
 })
 const showSearch = computed(() => !showQuotaManage.value && !showGroupView.value && !showHelp.value)
@@ -1756,30 +1756,30 @@ async function handleWalletLogin() {
   }
 }
 
-function clearPassportTimer() {
-  if (passportTimer !== null) {
-    window.clearInterval(passportTimer)
-    passportTimer = null
+function clearIdentityTimer() {
+  if (identityTimer !== null) {
+    window.clearInterval(identityTimer)
+    identityTimer = null
   }
 }
 
-async function refreshPassportLogin() {
-  passportRequestSeq += 1
-  const requestSeq = passportRequestSeq
-  clearPassportTimer()
-  passportLoading.value = true
-  passportPolling.value = false
-  passportSessionId.value = ''
-  passportQrcodeUrl.value = ''
-  passportQrcodeImage.value = ''
-  passportStatusText.value = ''
+async function refreshIdentityLogin() {
+  identityRequestSeq += 1
+  const requestSeq = identityRequestSeq
+  clearIdentityTimer()
+  identityLoading.value = true
+  identityPolling.value = false
+  identitySessionId.value = ''
+  identityQrcodeUrl.value = ''
+  identityQrcodeImage.value = ''
+  identityStatusText.value = ''
   try {
-    const session = await createPassportLoginSession()
-    if (requestSeq !== passportRequestSeq) return
-    passportSessionId.value = session.sessionId
-    passportQrcodeUrl.value = session.qrcodeUrl
-    passportPollInterval.value = Math.max(1, session.pollInterval || 2)
-    passportQrcodeImage.value = await QRCode.toDataURL(session.qrcodeUrl, {
+    const session = await createIdentityLoginSession()
+    if (requestSeq !== identityRequestSeq) return
+    identitySessionId.value = session.sessionId
+    identityQrcodeUrl.value = session.qrcodeUrl
+    identityPollInterval.value = Math.max(1, session.pollInterval || 2)
+    identityQrcodeImage.value = await QRCode.toDataURL(session.qrcodeUrl, {
       width: 220,
       margin: 2,
       color: {
@@ -1787,78 +1787,78 @@ async function refreshPassportLogin() {
         light: '#ffffff'
       }
     })
-    startPassportPolling()
+    startIdentityPolling()
   } catch (error: any) {
-    if (requestSeq !== passportRequestSeq) return
-    passportStatusText.value = error?.message || '通行证登录暂不可用'
+    if (requestSeq !== identityRequestSeq) return
+    identityStatusText.value = error?.message || '通行证登录暂不可用'
   } finally {
-    if (requestSeq === passportRequestSeq) {
-      passportLoading.value = false
+    if (requestSeq === identityRequestSeq) {
+      identityLoading.value = false
     }
   }
 }
 
-function startPassportPolling() {
-  clearPassportTimer()
-  if (!passportSessionId.value) return
-  void checkPassportStatus()
-  passportTimer = window.setInterval(() => {
-    void checkPassportStatus()
-  }, passportPollInterval.value * 1000)
+function startIdentityPolling() {
+  clearIdentityTimer()
+  if (!identitySessionId.value) return
+  void checkIdentityStatus()
+  identityTimer = window.setInterval(() => {
+    void checkIdentityStatus()
+  }, identityPollInterval.value * 1000)
 }
 
-async function checkPassportStatus() {
-  if (!passportSessionId.value || passportPolling.value) return
-  passportPolling.value = true
-  const sessionId = passportSessionId.value
+async function checkIdentityStatus() {
+  if (!identitySessionId.value || identityPolling.value) return
+  identityPolling.value = true
+  const sessionId = identitySessionId.value
   try {
-    const status = await pollPassportLoginStatus(sessionId)
-    if (sessionId !== passportSessionId.value) return
+    const status = await pollIdentityLoginStatus(sessionId)
+    if (sessionId !== identitySessionId.value) return
     if (status.token || status.status === 'approved') {
-      clearPassportTimer()
-      passportStatusText.value = '登录成功，正在进入资产仓库'
+      clearIdentityTimer()
+      identityStatusText.value = '登录成功，正在进入资产仓库'
       window.location.reload()
       return
     }
     if (status.status === 'scanned') {
-      passportStatusText.value = '已扫码，请在手机上确认登录'
+      identityStatusText.value = '已扫码，请在手机上确认登录'
     } else if (status.status === 'rejected') {
-      passportStatusText.value = '已拒绝登录，请刷新二维码'
-      clearPassportTimer()
+      identityStatusText.value = '已拒绝登录，请刷新二维码'
+      clearIdentityTimer()
     } else if (status.status === 'expired') {
-      passportStatusText.value = '二维码已过期，请刷新'
-      clearPassportTimer()
+      identityStatusText.value = '二维码已过期，请刷新'
+      clearIdentityTimer()
     } else {
-      passportStatusText.value = status.message || ''
+      identityStatusText.value = status.message || ''
     }
   } catch (error: any) {
     if (error?.code === 'expired') {
-      passportStatusText.value = '二维码已过期，请刷新'
-      clearPassportTimer()
+      identityStatusText.value = '二维码已过期，请刷新'
+      clearIdentityTimer()
     } else {
-      passportStatusText.value = error?.message || '通行证登录状态异常'
+      identityStatusText.value = error?.message || '通行证登录状态异常'
     }
   } finally {
-    passportPolling.value = false
+    identityPolling.value = false
   }
 }
 
 function switchLoginMode(mode: LoginMode) {
   loginMode.value = mode
-  if (mode !== 'passport') {
-    clearPassportTimer()
+  if (mode !== 'identity') {
+    clearIdentityTimer()
   }
-  if (mode === 'passport' && !passportSessionId.value && !passportLoading.value) {
-    void refreshPassportLogin()
+  if (mode === 'identity' && !identitySessionId.value && !identityLoading.value) {
+    void refreshIdentityLogin()
   }
 }
 
-function openPassportAuthorize() {
-  if (!passportQrcodeUrl.value) return
-  window.open(passportQrcodeUrl.value, '_blank', 'noopener,noreferrer')
+function openIdentityAuthorize() {
+  if (!identityQrcodeUrl.value) return
+  window.open(identityQrcodeUrl.value, '_blank', 'noopener,noreferrer')
 }
 
-function handlePassportCallbackEvent(payload: unknown) {
+function handleIdentityCallbackEvent(payload: unknown) {
   let data = payload as any
   if (typeof payload === 'string') {
     try {
@@ -1867,20 +1867,20 @@ function handlePassportCallbackEvent(payload: unknown) {
       return
     }
   }
-  if (data?.action !== 'warehouse-passport-callback') return
-  if (!passportSessionId.value || data?.sessionId !== passportSessionId.value) return
-  passportStatusText.value = '已确认，正在完成登录'
-  void checkPassportStatus()
+  if (data?.action !== 'warehouse-identity-callback') return
+  if (!identitySessionId.value || data?.sessionId !== identitySessionId.value) return
+  identityStatusText.value = '已确认，正在完成登录'
+  void checkIdentityStatus()
 }
 
-function handlePassportStorage(event: StorageEvent) {
-  if (event.key !== '__warehouse_passport_callback__' || !event.newValue) return
-  handlePassportCallbackEvent(event.newValue)
+function handleIdentityStorage(event: StorageEvent) {
+  if (event.key !== '__warehouse_identity_callback__' || !event.newValue) return
+  handleIdentityCallbackEvent(event.newValue)
 }
 
-function handlePassportMessage(event: MessageEvent) {
+function handleIdentityMessage(event: MessageEvent) {
   if (event.origin !== window.location.origin) return
-  handlePassportCallbackEvent(event.data)
+  handleIdentityCallbackEvent(event.data)
 }
 
 // 获取文件列表 (WebDAV PROPFIND)
@@ -5730,24 +5730,24 @@ onMounted(() => {
     walletPresent.value = present
   })
   void loadCipherSuiteOptions()
-  if (!loggedIn.value && loginMode.value === 'passport') {
-    void refreshPassportLogin()
+  if (!loggedIn.value && loginMode.value === 'identity') {
+    void refreshIdentityLogin()
   }
-  window.addEventListener('storage', handlePassportStorage)
-  window.addEventListener('message', handlePassportMessage)
+  window.addEventListener('storage', handleIdentityStorage)
+  window.addEventListener('message', handleIdentityMessage)
   if ('BroadcastChannel' in window) {
-    passportBroadcastChannel = new BroadcastChannel('warehouse-passport-login')
-    passportBroadcastChannel.onmessage = event => handlePassportCallbackEvent(event.data)
+    identityBroadcastChannel = new BroadcastChannel('warehouse-identity-login')
+    identityBroadcastChannel.onmessage = event => handleIdentityCallbackEvent(event.data)
   }
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', syncViewportMode)
-  window.removeEventListener('storage', handlePassportStorage)
-  window.removeEventListener('message', handlePassportMessage)
-  passportBroadcastChannel?.close()
-  passportBroadcastChannel = null
-  clearPassportTimer()
+  window.removeEventListener('storage', handleIdentityStorage)
+  window.removeEventListener('message', handleIdentityMessage)
+  identityBroadcastChannel?.close()
+  identityBroadcastChannel = null
+  clearIdentityTimer()
   stopWalletProviderWatch?.()
 })
 </script>
@@ -5758,7 +5758,7 @@ onBeforeUnmount(() => {
     <div v-if="!loggedIn" class="login-page">
       <div class="login-floating-container">
         <div class="login-hero">
-          <div class="login-card" :class="{ 'is-wallet-mode': loginMode === 'wallet', 'is-passport-mode': loginMode === 'passport' }">
+          <div class="login-card" :class="{ 'is-wallet-mode': loginMode === 'wallet', 'is-identity-mode': loginMode === 'identity' }">
             <div class="login-card-switch">
               <el-tooltip :content="nextLoginModeLabel" placement="left">
                 <el-button class="login-mode-button" :aria-label="nextLoginModeLabel" @click="switchLoginMode(nextLoginMode)">
@@ -5776,16 +5776,16 @@ onBeforeUnmount(() => {
             </div>
 
             <transition name="login-mode" mode="out-in">
-              <div v-if="loginMode === 'passport'" key="passport" class="login-passport-panel">
-                <button type="button" class="login-qrcode-frame" :disabled="passportLoading" @click="refreshPassportLogin">
-                  <img v-if="passportQrcodeImage" :src="passportQrcodeImage" alt="通行证登录二维码" />
-                  <span v-else class="login-qrcode-placeholder">{{ passportLoading ? '加载中' : '刷新二维码' }}</span>
+              <div v-if="loginMode === 'identity'" key="identity" class="login-identity-panel">
+                <button type="button" class="login-qrcode-frame" :disabled="identityLoading" @click="refreshIdentityLogin">
+                  <img v-if="identityQrcodeImage" :src="identityQrcodeImage" alt="通行证登录二维码" />
+                  <span v-else class="login-qrcode-placeholder">{{ identityLoading ? '加载中' : '刷新二维码' }}</span>
                 </button>
-                <div v-if="passportStatusText" class="login-status-line">
-                  {{ passportStatusText }}
+                <div v-if="identityStatusText" class="login-status-line">
+                  {{ identityStatusText }}
                 </div>
-                <div class="login-passport-actions">
-                  <el-button text @click="openPassportAuthorize">无法扫码？使用本机通行证登录</el-button>
+                <div class="login-identity-actions">
+                  <el-button text @click="openIdentityAuthorize">无法扫码？使用本机通行证登录</el-button>
                 </div>
               </div>
 
@@ -7399,7 +7399,7 @@ onBeforeUnmount(() => {
   color: #64748b;
 }
 
-.login-passport-panel,
+.login-identity-panel,
 .login-wallet-panel {
   width: min(360px, 100%);
   display: flex;
@@ -7448,7 +7448,7 @@ onBeforeUnmount(() => {
   line-height: 1.5;
 }
 
-.login-passport-actions {
+.login-identity-actions {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -7511,7 +7511,7 @@ onBeforeUnmount(() => {
 }
 
 .login-bottom-link a,
-.login-passport-actions :deep(.el-button) {
+.login-identity-actions :deep(.el-button) {
   color: #2563eb;
 }
 

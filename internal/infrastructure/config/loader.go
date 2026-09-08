@@ -280,23 +280,6 @@ func (l *Loader) overrideFromEnv(config *Config) {
 	if v := os.Getenv("WEBDAV_UCAN_APP_SCOPE_PATH_PREFIX"); v != "" {
 		config.Web3.UCAN.AppScope.PathPrefix = v
 	}
-	if v := os.Getenv("WEBDAV_PASSPORT_ENABLED"); v != "" {
-		config.Passport.Enabled = parseEnvBool(v)
-	}
-	if v := os.Getenv("WEBDAV_PASSPORT_NODE_URL"); v != "" {
-		config.Passport.NodeURL = v
-	}
-	if v := os.Getenv("WEBDAV_PASSPORT_CLIENT_ID"); v != "" {
-		config.Passport.ClientID = v
-	}
-	if v := os.Getenv("WEBDAV_PASSPORT_SCOPE"); v != "" {
-		config.Passport.Scope = v
-	}
-	if v := os.Getenv("WEBDAV_PASSPORT_SESSION_TTL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			config.Passport.SessionTTL = d
-		}
-	}
 	if v := os.Getenv("WEBDAV_ADMIN_ADDRESSES"); v != "" {
 		config.Security.AdminAddresses = strings.Split(v, ",")
 	}
@@ -387,8 +370,8 @@ func (l *Loader) validate(config *Config) error {
 	if err := l.validateWeb3(config); err != nil {
 		return fmt.Errorf("web3 config: %w", err)
 	}
-	if err := l.validatePassport(config); err != nil {
-		return fmt.Errorf("passport config: %w", err)
+	if err := l.validateIdentity(config); err != nil {
+		return fmt.Errorf("identity config: %w", err)
 	}
 	if err := l.validateEmail(config); err != nil {
 		return fmt.Errorf("email config: %w", err)
@@ -593,29 +576,30 @@ func (l *Loader) validateWeb3(config *Config) error {
 	return nil
 }
 
-func (l *Loader) validatePassport(config *Config) error {
-	passport := &config.Passport
-	passport.NodeURL = strings.TrimRight(strings.TrimSpace(passport.NodeURL), "/")
-	passport.ClientID = strings.TrimSpace(passport.ClientID)
-	passport.Scope = strings.TrimSpace(passport.Scope)
-	if passport.Scope == "" {
-		passport.Scope = "identity.basic identity.username identity.email identity.wallet identity.avatar"
+func (l *Loader) validateIdentity(config *Config) error {
+	identity := &config.Identity
+	identity.NodeURL = strings.TrimRight(strings.TrimSpace(identity.NodeURL), "/")
+	identity.ClientID = strings.TrimSpace(identity.ClientID)
+	identity.Scope = strings.TrimSpace(identity.Scope)
+	identity.IdentityTrustDir = strings.TrimSpace(identity.IdentityTrustDir)
+	if identity.Scope == "" {
+		identity.Scope = "identity.basic identity.username identity.email identity.wallet identity.avatar"
 	}
-	if passport.SessionTTL <= 0 {
-		passport.SessionTTL = 5 * time.Minute
+	if identity.SessionTTL <= 0 {
+		identity.SessionTTL = 5 * time.Minute
 	}
-	if !passport.Enabled {
+	if !identity.Enabled {
 		return nil
 	}
-	if passport.NodeURL == "" {
-		return errors.New("node_url is required when passport login is enabled")
+	if identity.NodeURL == "" {
+		return errors.New("node_url is required when identity login is enabled")
 	}
-	parsed, err := url.Parse(passport.NodeURL)
+	parsed, err := url.Parse(identity.NodeURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return errors.New("node_url must include scheme and host")
 	}
-	if passport.ClientID == "" {
-		return errors.New("client_id is required when passport login is enabled")
+	if identity.ClientID == "" {
+		return errors.New("client_id is required when identity login is enabled")
 	}
 	return nil
 }
