@@ -98,6 +98,16 @@ main() {
 
     cp "$source_config" "$TMP_DIR/config.yaml" || fail "failed to copy config.yaml to temp directory"
 
+    local nginx_conf_file=""
+    for nginx_conf_file in \
+        "/etc/nginx/conf.d/test-webdv.conf" \
+        "/etc/nginx/conf.d/warehouse.conf"; do
+        if [[ -f "$nginx_conf_file" ]]; then
+            cp "$nginx_conf_file" "$TMP_DIR/$(basename "$nginx_conf_file")" \
+                || fail "failed to copy $(basename "$nginx_conf_file") to temp directory"
+        fi
+    done
+
     log "start config backup: $MODULE_DIR -> $backup_file"
 
     if gpg --batch --yes --symmetric --cipher-algo AES256 \
