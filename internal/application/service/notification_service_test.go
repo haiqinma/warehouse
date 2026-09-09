@@ -140,7 +140,7 @@ func TestNotificationServicePublishesQuotaEmailToNode(t *testing.T) {
 	if event.Type != "warehouse.storage.quota.warning" {
 		t.Fatalf("event type = %q", event.Type)
 	}
-	if event.EventID != "warehouse-storage-quota-1001-error" {
+	if !strings.HasPrefix(event.EventID, "warehouse-storage-quota-1001-error-") {
 		t.Fatalf("event id = %q", event.EventID)
 	}
 	if len(event.Recipients) != 1 || event.Recipients[0] != strings.ToLower(u.IdentityDID) {
@@ -176,6 +176,44 @@ func TestNotificationServiceQuotaThresholdIsConfigurable(t *testing.T) {
 	}
 	if len(notificationRepo.items) != 1 {
 		t.Fatalf("80%% usage created %d notifications, want 1", len(notificationRepo.items))
+	}
+}
+
+func TestNotificationServiceStartsNewQuotaEpisodeAfterUsageRecovers(t *testing.T) {
+	ctx := context.Background()
+	notificationRepo := newFakeNotificationRepository()
+	userRepo := newTestUserRepo()
+	publisher := &recordingEmailPublisher{}
+	svc := NewNotificationService(notificationRepo, userRepo, nil)
+	svc.SetEmailPublisher(publisher)
+	svc.SetQuotaNotificationThresholdPercent(80)
+
+	u := &user.User{ID: "1003", Username: "alice", IdentityDID: "did:yeying:wid_1234567890123456789012", Quota: 1000}
+	if err := svc.EnsureUserQuotaNotification(ctx, u, u.Quota, 850); err != nil {
+		t.Fatalf("first warning error = %v", err)
+	}
+	if err := svc.EnsureUserQuotaNotification(ctx, u, u.Quota, 900); err != nil {
+		t.Fatalf("sustained warning error = %v", err)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("sustained warning published %d events, want 1", len(publisher.events))
+	}
+	firstEventID := publisher.events[0].EventID
+
+	if err := svc.EnsureUserQuotaNotification(ctx, u, u.Quota, 790); err != nil {
+		t.Fatalf("recovered usage error = %v", err)
+	}
+	if count, err := svc.UnreadCountForUser(ctx, u); err != nil || count != 0 {
+		t.Fatalf("recovered active unread = %d, err = %v; want 0", count, err)
+	}
+	if err := svc.EnsureUserQuotaNotification(ctx, u, u.Quota, 810); err != nil {
+		t.Fatalf("second warning error = %v", err)
+	}
+	if len(publisher.events) != 2 {
+		t.Fatalf("second warning published %d events, want 2", len(publisher.events))
+	}
+	if publisher.events[1].EventID == firstEventID {
+		t.Fatalf("second warning reused event id %q", firstEventID)
 	}
 }
 
@@ -251,6 +289,19 @@ func (r *fakeNotificationRepository) UpsertByDedupeKey(_ context.Context, item *
 		}
 	}
 	return r.Create(context.Background(), item)
+}
+
+func (r *fakeNotificationRepository) FindActiveForUserByTypeSeverityAction(_ context.Context, userID, notificationType, severity, actionURL string) (*notification.Notification, error) {
+	for i := len(r.items) - 1; i >= 0; i-- {
+		item := r.items[i]
+		if item == nil || item.ExpiresAt != nil {
+			continue
+		}
+		if item.RecipientUserID == userID && item.Type == notificationType && item.Severity == severity && item.ActionURL == actionURL {
+			return cloneNotification(item), nil
+		}
+	}
+	return nil, nil
 }
 
 func (r *fakeNotificationRepository) ListForUser(_ context.Context, userID string, limit int) ([]*notification.Notification, error) {
