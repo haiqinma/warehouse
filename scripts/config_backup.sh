@@ -52,8 +52,8 @@ cleanup() {
 main() {
     init_log_file "config-backup-${MODULE_NAME}.log"
 
-    local conf_file="${SCRIPT_DIR}/backup.conf"
-    local passphrase_file="${SCRIPT_DIR}/.passphrase-file"
+    local conf_file="/data/${MODULE_NAME}/backup.conf"
+    local passphrase_file="/data/${MODULE_NAME}/.passphrase-file"
     local source_config="${MODULE_DIR}/config.yaml"
     local backup_dir="/opt/backup"
     local backup_file=""
@@ -97,6 +97,16 @@ main() {
     mkdir -p "$TMP_DIR" || fail "failed to create temp directory: $TMP_DIR"
 
     cp "$source_config" "$TMP_DIR/config.yaml" || fail "failed to copy config.yaml to temp directory"
+
+    local nginx_conf_file=""
+    for nginx_conf_file in \
+        "/etc/nginx/conf.d/test-webdv.conf" \
+        "/etc/nginx/conf.d/warehouse.conf"; do
+        if [[ -f "$nginx_conf_file" ]]; then
+            cp "$nginx_conf_file" "$TMP_DIR/$(basename "$nginx_conf_file")" \
+                || fail "failed to copy $(basename "$nginx_conf_file") to temp directory"
+        fi
+    done
 
     log "start config backup: $MODULE_DIR -> $backup_file"
 
