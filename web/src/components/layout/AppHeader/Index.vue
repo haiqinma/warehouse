@@ -712,7 +712,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </el-popover>
-      <el-dropdown v-if="isAuth && account" trigger="click" @command="handleMenuCommand">
+      <el-dropdown v-if="isAuth" trigger="click" @command="handleMenuCommand">
         <span class="account account-trigger">
           {{ username || '当前用户' }}
         </span>
