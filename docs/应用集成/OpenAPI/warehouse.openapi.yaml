@@ -425,28 +425,6 @@ paths:
                 additionalProperties: true
         "401":
           $ref: "#/components/responses/LegacyError"
-  /api/v1/public/webdav/user/update:
-    post:
-      tags: [User]
-      operationId: updateCurrentUsername
-      summary: 修改当前用户名
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [username]
-              properties:
-                username: {type: string, minLength: 1}
-      responses:
-        "200":
-          description: 修改成功
-          content:
-            application/json:
-              schema: {type: object, additionalProperties: true}
-        "400":
-          $ref: "#/components/responses/LegacyError"
   /api/v1/public/webdav/user/password:
     post:
       tags: [User]
@@ -2238,7 +2216,6 @@ components:
       required: [username]
       properties:
         username: {type: string, minLength: 1, description: 待修改用户}
-        new_username: {type: string, minLength: 1}
         wallet_address: {$ref: "#/components/schemas/WalletAddress"}
         email: {type: string, format: email}
         directory: {type: string, minLength: 1}

@@ -132,6 +132,69 @@ func TestIdentityLoginVerifyUsesLocalTrustBundle(t *testing.T) {
 	}
 }
 
+func TestIdentityLoginVerifyOverwritesExistingWarehouseUsername(t *testing.T) {
+	issuerPublic, issuerPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holderPublic, holderPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustDir := writeIdentityTrustBundle(t, issuerPublic)
+	repo := newMemoryUserRepo()
+	address := "0x5c7bf91c493126314bb821c123dee889ffca3932"
+	existing := domainUser.NewUser("QuickFox123", "QuickFox123")
+	if err := existing.SetWalletAddress(address); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Save(context.Background(), existing); err != nil {
+		t.Fatal(err)
+	}
+	authenticator := infraAuth.NewWeb3Authenticator(repo, "0123456789abcdef0123456789abcdef", time.Hour, 24*time.Hour, nil, nil, zap.NewNop(), true)
+	handler := NewIdentityHandler(authenticator, repo, nil, config.IdentityConfig{
+		Enabled:          true,
+		NodeURL:          "http://127.0.0.1:1",
+		ClientID:         "warehouse",
+		Scope:            "identity.basic identity.username identity.wallet identity.email",
+		SessionTTL:       time.Minute,
+		IdentityTrustDir: trustDir,
+	}, zap.NewNop())
+
+	sessionReq := httptest.NewRequest(http.MethodPost, "http://warehouse.test/api/v1/public/auth/identity/login/session", nil)
+	sessionRec := httptest.NewRecorder()
+	handler.HandleIdentityLoginSession(sessionRec, sessionReq)
+	if sessionRec.Code != http.StatusOK {
+		t.Fatalf("session status = %d, body = %s", sessionRec.Code, sessionRec.Body.String())
+	}
+	sessionData := decodeSDKData(t, sessionRec.Body.Bytes())
+	did := "did:yeying:wid_abcdefghijklmnopqrstuvwxyz"
+	presentation := signedIdentityPresentation(t, holderPublic, holderPrivate, issuerPrivate, did, address, sessionData)
+	body, _ := json.Marshal(map[string]any{
+		"session_id":   sessionData["session_id"],
+		"address":      address,
+		"presentation": presentation,
+	})
+
+	verifyReq := httptest.NewRequest(http.MethodPost, "http://warehouse.test/api/v1/public/auth/identity/login/verify", bytes.NewReader(body))
+	verifyRec := httptest.NewRecorder()
+	handler.HandleIdentityLoginVerify(verifyRec, verifyReq)
+	if verifyRec.Code != http.StatusOK {
+		t.Fatalf("verify status = %d, body = %s", verifyRec.Code, verifyRec.Body.String())
+	}
+	verifyData := decodeSDKData(t, verifyRec.Body.Bytes())
+	if verifyData["username"] != "walletuser" {
+		t.Fatalf("response username = %v", verifyData["username"])
+	}
+	updated, err := repo.FindByWalletAddress(context.Background(), address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Username != "walletuser" {
+		t.Fatalf("stored username = %q", updated.Username)
+	}
+}
+
 func writeIdentityTrustBundle(t *testing.T, issuerPublic ed25519.PublicKey) string {
 	t.Helper()
 	dir := t.TempDir()

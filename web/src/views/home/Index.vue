@@ -167,9 +167,6 @@ const groupStore = useGroupStore()
 const { groupLoading, managedGroups, activeGroupMembers } = storeToRefs(groupStore)
 const shareAddressMembers = computed(() => dedupeGroupMembersByWalletAddress(activeGroupMembers.value))
 const uploadTaskStore = useUploadTaskStore()
-const editingUsername = ref(false)
-const usernameDraft = ref('')
-const usernameSaving = ref(false)
 const passwordDialogVisible = ref(false)
 const passwordSubmitting = ref(false)
 const passwordForm = ref({
@@ -2367,48 +2364,6 @@ function closeAccessKeyDialog() {
   accessKeyDialogVisible.value = false
 }
 
-
-function startEditUsername() {
-  usernameDraft.value = userProfile.value.username || ''
-  editingUsername.value = true
-}
-
-function cancelEditUsername() {
-  editingUsername.value = false
-  usernameDraft.value = ''
-}
-
-async function submitUsername() {
-  const nextName = usernameDraft.value.trim()
-  if (!nextName) {
-    showError('用户名不能为空')
-    return
-  }
-  if (nextName === userProfile.value.username) {
-    cancelEditUsername()
-    return
-  }
-  usernameSaving.value = true
-  try {
-    const data = await userApi.updateUsername(nextName)
-    const finalName = data?.username || nextName
-    if (userInfo.value) {
-      userInfo.value.username = finalName
-    }
-    localStorage.setItem('username', finalName)
-    const currentAccount = localStorage.getItem('currentAccount')
-    if (!userInfo.value?.wallet_address || currentAccount === userProfile.value.username) {
-      localStorage.setItem('currentAccount', finalName)
-    }
-    showSuccess('用户名已更新')
-    editingUsername.value = false
-  } catch (error: any) {
-    console.error('更新用户名失败:', error)
-    showError(error?.message || '更新用户名失败')
-  } finally {
-    usernameSaving.value = false
-  }
-}
 
 function openPasswordDialog() {
   passwordForm.value = {
@@ -6391,37 +6346,7 @@ onBeforeUnmount(() => {
                 <div class="user-list">
                   <div class="user-row">
                     <span class="user-label">用户名</span>
-                    <div class="user-value user-inline">
-                      <span v-if="!editingUsername" class="user-text">{{ userProfile.username }}</span>
-                      <el-input
-                        v-else
-                        v-model="usernameDraft"
-                        size="small"
-                        class="user-input"
-                        placeholder="请输入新用户名"
-                      />
-                      <div class="user-actions">
-                        <el-button
-                          v-if="!editingUsername"
-                          size="small"
-                          text
-                          @click="startEditUsername"
-                        >
-                          修改
-                        </el-button>
-                        <template v-else>
-                          <el-button
-                            size="small"
-                            type="primary"
-                            :loading="usernameSaving"
-                            @click="submitUsername"
-                          >
-                            保存
-                          </el-button>
-                          <el-button size="small" @click="cancelEditUsername">取消</el-button>
-                        </template>
-                      </div>
-                    </div>
+                    <span class="user-value">{{ userProfile.username }}</span>
                   </div>
                   <div class="user-row">
                     <span class="user-label">钱包地址</span>

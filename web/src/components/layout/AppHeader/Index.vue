@@ -4,13 +4,14 @@ import { Bell, Check, Close, Notebook, SwitchButton, Wallet } from '@element-plu
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import { groupApi, notificationApi, userApi, type AdminNotificationCreatePayload, type NotificationItem, type NotificationPreferenceItem } from '@/api'
-import { AUTH_CHANGED_EVENT, isLoggedIn, getCurrentAccount, logout, loginWithWallet, focusPendingWalletApproval, getWalletName, watchWalletAccounts, watchWalletProvider } from '@/plugins/auth'
+import { AUTH_CHANGED_EVENT, isLoggedIn, getCurrentAccount, getUsername, logout, loginWithWallet, focusPendingWalletApproval, getWalletName, watchWalletAccounts, watchWalletProvider } from '@/plugins/auth'
 import { useUploadTaskStore } from '@/stores/uploadTaskStore'
 import UploadTaskListView from '@/views/home/components/UploadTaskListView.vue'
 import type { UploadTask } from '@/views/home/types'
 
 const isAuth = ref(false)
 const account = ref<string | null>(null)
+const username = ref<string | null>(null)
 const walletInfo = ref({ present: false, name: '' })
 const walletConnectSubmitting = ref(false)
 const notificationOpen = ref(false)
@@ -66,6 +67,8 @@ function handleBeforeUnload(event: BeforeUnloadEvent) {
 onMounted(() => {
   isAuth.value = isLoggedIn()
   account.value = getCurrentAccount()
+  username.value = getUsername()
+  void refreshUsername()
   stopWalletProviderWatch = watchWalletProvider((present) => {
     walletInfo.value = {
       present,
@@ -120,7 +123,12 @@ function handleLogout() {
 function handleAuthChanged(): void {
   isAuth.value = isLoggedIn()
   account.value = getCurrentAccount()
+  username.value = getUsername()
+  if (isAuth.value) {
+    void refreshUsername()
+  }
   if (!isAuth.value) {
+    username.value = null
     notificationOpen.value = false
     uploadTasksVisible.value = false
     unreadCount.value = 0
@@ -129,6 +137,19 @@ function handleAuthChanged(): void {
       window.clearInterval(notificationTimer)
       notificationTimer = null
     }
+  }
+}
+
+async function refreshUsername(): Promise<void> {
+  if (!isAuth.value) return
+  try {
+    const info = await userApi.getInfo()
+    const next = String(info.username || '').trim()
+    if (!next || !isAuth.value) return
+    username.value = next
+    localStorage.setItem('username', next)
+  } catch (error) {
+    console.warn('refresh header username failed:', error)
   }
 }
 
@@ -693,7 +714,7 @@ onBeforeUnmount(() => {
       </el-popover>
       <el-dropdown v-if="isAuth && account" trigger="click" @command="handleMenuCommand">
         <span class="account account-trigger">
-          {{ account.slice(0, 6) }}...{{ account.slice(-4) }}
+          {{ username || '当前用户' }}
         </span>
         <template #dropdown>
           <el-dropdown-menu>

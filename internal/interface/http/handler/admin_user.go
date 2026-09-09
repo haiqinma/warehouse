@@ -49,7 +49,6 @@ type adminUserCreateRequest struct {
 
 type adminUserUpdateRequest struct {
 	Username      string              `json:"username"`
-	NewUsername   *string             `json:"new_username,omitempty"`
 	WalletAddress *string             `json:"wallet_address,omitempty"`
 	Email         *string             `json:"email,omitempty"`
 	Directory     *string             `json:"directory,omitempty"`
@@ -249,15 +248,6 @@ func (h *AdminUserHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) 
 		h.logger.Error("failed to find user", zap.Error(err))
 		h.writeError(w, http.StatusInternalServerError, "Failed to find user")
 		return
-	}
-
-	if req.NewUsername != nil {
-		newName := strings.TrimSpace(*req.NewUsername)
-		if newName == "" {
-			h.writeError(w, http.StatusBadRequest, "new_username cannot be empty")
-			return
-		}
-		u.Username = newName
 	}
 
 	if req.Directory != nil {

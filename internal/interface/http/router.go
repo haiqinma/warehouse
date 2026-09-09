@@ -133,7 +133,6 @@ func (r *Router) Setup() http.Handler {
 	}
 	mux.Handle("/api/v1/public/webdav/quota", r.createAuthenticatedHandler(http.HandlerFunc(r.quotaHandler.GetUserQuota)))
 	mux.Handle("/api/v1/public/webdav/user/info", r.createAuthenticatedHandler(http.HandlerFunc(r.userHandler.GetUserInfo)))
-	mux.Handle("/api/v1/public/webdav/user/update", r.createAuthenticatedHandler(http.HandlerFunc(r.userHandler.UpdateUsername)))
 	mux.Handle("/api/v1/public/webdav/user/password", r.createAuthenticatedHandler(http.HandlerFunc(r.userHandler.UpdatePassword)))
 	if r.notificationHandler != nil {
 		mux.Handle("/api/v1/public/notifications/list", r.createAuthenticatedHandler(http.HandlerFunc(r.notificationHandler.HandleList)))

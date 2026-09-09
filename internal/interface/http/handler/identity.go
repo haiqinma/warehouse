@@ -381,6 +381,7 @@ func (h *IdentityHandler) completeLogin(w http.ResponseWriter, r *http.Request, 
 		h.sendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to process identity user")
 		return
 	}
+	h.applyIdentityUsername(r.Context(), currentUser, result.Data)
 	h.applyIdentityEmail(r.Context(), currentUser, result.Data)
 	if err := h.ensureAssetSpaces(currentUser); err != nil {
 		h.sendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to initialize user spaces")
@@ -428,6 +429,7 @@ func (h *IdentityHandler) completeIdentityLogin(w http.ResponseWriter, r *http.R
 		h.sendErrorWithData(w, http.StatusConflict, "WALLET_IDENTITY_USER_CONFLICT", "Failed to process Wallet Identity user", map[string]string{"code": "wallet_identity_user_conflict"})
 		return
 	}
+	h.applyIdentityUsername(r.Context(), currentUser, data)
 	h.applyIdentityEmail(r.Context(), currentUser, data)
 	if err := h.ensureAssetSpaces(currentUser); err != nil {
 		h.sendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to initialize user spaces")
@@ -568,6 +570,23 @@ func (h *IdentityHandler) applyIdentityEmail(ctx context.Context, currentUser *u
 	currentUser.Email = email
 	if err := h.userRepo.Save(ctx, currentUser); err != nil {
 		h.logger.Warn("failed to apply identity email claim", zap.String("email", email), zap.Error(err))
+	}
+}
+
+func (h *IdentityHandler) applyIdentityUsername(ctx context.Context, currentUser *user.User, data map[string]any) {
+	if currentUser == nil {
+		return
+	}
+	username := strings.TrimSpace(extractCredentialSubjectString(data, "UsernameCredential", "username"))
+	if username == "" || !isSafeIdentityUsername(username) || currentUser.Username == username {
+		return
+	}
+	originalUsername := currentUser.Username
+	currentUser.Username = username
+	currentUser.UpdatedAt = time.Now()
+	if err := h.userRepo.Save(ctx, currentUser); err != nil {
+		currentUser.Username = originalUsername
+		h.logger.Warn("failed to apply identity username claim", zap.String("username", username), zap.Error(err))
 	}
 }
 
