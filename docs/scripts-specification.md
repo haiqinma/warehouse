@@ -17,17 +17,18 @@
 | `sync.sh` | 从 upstream 拉取当前分支并执行 rebase，可选推送到 origin | `bash scripts/sync.sh` |
 | `test.sh` | 统一执行单元、集成、冒烟和端到端测试 | `bash scripts/test.sh --suite unit` |
 | `fix_control_plane_timestamps.sql` | 修复历史控制面表中存在本地时区残留的时间字段 | `psql "$DATABASE_URL" -v source_tz='Asia/Shanghai' -f scripts/fix_control_plane_timestamps.sql` |
-| `backup.conf.template` | `config_backup.sh` 的备份配置模板 | 复制为 `scripts/backup.conf` 后按环境修改 |
+| `backup.conf.template` | `config_backup.sh` 的备份配置模板 | 复制为 `/data/<module>/backup.conf` 后按环境修改 |
 
 ## `config_backup.sh`
 
-用于在部署环境中备份配置文件。脚本会读取 `scripts/backup.conf`，根据开关决定是否执行备份，并使用 `scripts/.passphrase-file` 中的口令通过 GPG 生成加密压缩包。
+用于在部署环境中备份配置文件。脚本会读取 `/data/<module>/backup.conf`，根据开关决定是否执行备份，并使用 `/data/<module>/.passphrase-file` 中的口令通过 GPG 生成加密压缩包。
 
 - 备份源：项目根目录下的 `config.yaml`。
 - 可选备份源：如果存在 `/etc/nginx/conf.d/test-webdv.conf` 或 `/etc/nginx/conf.d/warehouse.conf`，也会一并备份。
 - 备份内容布局：所有文件直接放在临时备份目录根部，不保留 `/etc/nginx/conf.d/` 子目录结构。
 - 输出目录：默认写入 `/opt/backup`。
 - 日志目录：默认写入 `/opt/logs/config-backup-<module>.log`。
+- 运行时配置目录：`/data/<module>/`，其中 `<module>` 为当前模块名；当部署目录名形如 `<module>-v<version>-<hash>` 时，会自动取版本前的模块名。
 
 返回值：
 
@@ -275,7 +276,7 @@ psql "$DATABASE_URL" -v source_tz='Asia/Shanghai' -f scripts/fix_control_plane_t
 
 ### `backup.conf.template`
 
-`config_backup.sh` 的配置模板。使用时复制为 `scripts/backup.conf`。
+`config_backup.sh` 的配置模板。使用时复制为 `/data/<module>/backup.conf`。
 
 可配置项：
 
@@ -285,7 +286,7 @@ psql "$DATABASE_URL" -v source_tz='Asia/Shanghai' -f scripts/fix_control_plane_t
 
 ### `.passphrase-file.template`
 
-`config_backup.sh` 使用的 GPG 口令文件模板。使用时复制为 `scripts/.passphrase-file`，并写入实际加密口令。
+`config_backup.sh` 使用的 GPG 口令文件模板。使用时复制为 `/data/<module>/.passphrase-file`，并写入实际加密口令。
 
 注意：
 

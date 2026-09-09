@@ -52,8 +52,8 @@ cleanup() {
 main() {
     init_log_file "config-backup-${MODULE_NAME}.log"
 
-    local conf_file="${SCRIPT_DIR}/backup.conf"
-    local passphrase_file="${SCRIPT_DIR}/.passphrase-file"
+    local conf_file="/data/${MODULE_NAME}/backup.conf"
+    local passphrase_file="/data/${MODULE_NAME}/.passphrase-file"
     local source_config="${MODULE_DIR}/config.yaml"
     local backup_dir="/opt/backup"
     local backup_file=""
