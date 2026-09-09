@@ -280,77 +280,10 @@ func (l *Loader) overrideFromEnv(config *Config) {
 	if v := os.Getenv("WEBDAV_UCAN_APP_SCOPE_PATH_PREFIX"); v != "" {
 		config.Web3.UCAN.AppScope.PathPrefix = v
 	}
-	if v := os.Getenv("WEBDAV_PASSPORT_ENABLED"); v != "" {
-		config.Passport.Enabled = parseEnvBool(v)
-	}
-	if v := os.Getenv("WEBDAV_PASSPORT_NODE_URL"); v != "" {
-		config.Passport.NodeURL = v
-	}
-	if v := os.Getenv("WEBDAV_PASSPORT_CLIENT_ID"); v != "" {
-		config.Passport.ClientID = v
-	}
-	if v := os.Getenv("WEBDAV_PASSPORT_SCOPE"); v != "" {
-		config.Passport.Scope = v
-	}
-	if v := os.Getenv("WEBDAV_PASSPORT_SESSION_TTL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			config.Passport.SessionTTL = d
-		}
-	}
 	if v := os.Getenv("WEBDAV_ADMIN_ADDRESSES"); v != "" {
 		config.Security.AdminAddresses = strings.Split(v, ",")
 	}
 
-	if v := os.Getenv("WEBDAV_EMAIL_ENABLED"); v != "" {
-		config.Email.Enabled = parseEnvBool(v)
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_SMTP_HOST"); v != "" {
-		config.Email.SMTPHost = v
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_SMTP_PORT"); v != "" {
-		if port, err := strconv.Atoi(v); err == nil {
-			config.Email.SMTPPort = port
-		}
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_SMTP_USERNAME"); v != "" {
-		config.Email.SMTPUsername = v
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_SMTP_PASSWORD"); v != "" {
-		config.Email.SMTPPassword = v
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_FROM"); v != "" {
-		config.Email.From = v
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_FROM_NAME"); v != "" {
-		config.Email.FromName = v
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_TEMPLATE_PATH"); v != "" {
-		config.Email.TemplatePath = v
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_CODE_TTL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			config.Email.CodeTTL = d
-		}
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_SEND_INTERVAL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			config.Email.SendInterval = d
-		}
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_CODE_LENGTH"); v != "" {
-		if length, err := strconv.Atoi(v); err == nil {
-			config.Email.CodeLength = length
-		}
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_AUTO_CREATE_ON_LOGIN"); v != "" {
-		config.Email.AutoCreateOnLogin = parseEnvBool(v)
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_USE_TLS"); v != "" {
-		config.Email.UseTLS = parseEnvBool(v)
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_INSECURE_SKIP_VERIFY"); v != "" {
-		config.Email.InsecureSkipVerify = parseEnvBool(v)
-	}
 }
 
 func parseEnvBool(value string) bool {
@@ -387,8 +320,8 @@ func (l *Loader) validate(config *Config) error {
 	if err := l.validateWeb3(config); err != nil {
 		return fmt.Errorf("web3 config: %w", err)
 	}
-	if err := l.validatePassport(config); err != nil {
-		return fmt.Errorf("passport config: %w", err)
+	if err := l.validateIdentity(config); err != nil {
+		return fmt.Errorf("identity config: %w", err)
 	}
 	if err := l.validateEmail(config); err != nil {
 		return fmt.Errorf("email config: %w", err)
@@ -400,6 +333,9 @@ func (l *Loader) validate(config *Config) error {
 }
 
 func (l *Loader) validateQuota(config *Config) error {
+	if config.Quota.NotificationThresholdPercent <= 0 || config.Quota.NotificationThresholdPercent > 100 {
+		return errors.New("quota.notification_threshold_percent must be greater than 0 and less than or equal to 100")
+	}
 	if !config.Quota.AutoReconcileEnabled {
 		return nil
 	}
@@ -593,47 +529,36 @@ func (l *Loader) validateWeb3(config *Config) error {
 	return nil
 }
 
-func (l *Loader) validatePassport(config *Config) error {
-	passport := &config.Passport
-	passport.NodeURL = strings.TrimRight(strings.TrimSpace(passport.NodeURL), "/")
-	passport.ClientID = strings.TrimSpace(passport.ClientID)
-	passport.Scope = strings.TrimSpace(passport.Scope)
-	if passport.Scope == "" {
-		passport.Scope = "identity.basic identity.username identity.email identity.wallet identity.avatar"
+func (l *Loader) validateIdentity(config *Config) error {
+	identity := &config.Identity
+	identity.NodeURL = strings.TrimRight(strings.TrimSpace(identity.NodeURL), "/")
+	identity.ClientID = strings.TrimSpace(identity.ClientID)
+	identity.Scope = strings.TrimSpace(identity.Scope)
+	identity.IdentityTrustDir = strings.TrimSpace(identity.IdentityTrustDir)
+	if identity.Scope == "" {
+		identity.Scope = "identity.basic identity.username identity.email identity.wallet identity.avatar"
 	}
-	if passport.SessionTTL <= 0 {
-		passport.SessionTTL = 5 * time.Minute
+	if identity.SessionTTL <= 0 {
+		identity.SessionTTL = 5 * time.Minute
 	}
-	if !passport.Enabled {
+	if !identity.Enabled {
 		return nil
 	}
-	if passport.NodeURL == "" {
-		return errors.New("node_url is required when passport login is enabled")
+	if identity.NodeURL == "" {
+		return errors.New("node_url is required when identity login is enabled")
 	}
-	parsed, err := url.Parse(passport.NodeURL)
+	parsed, err := url.Parse(identity.NodeURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return errors.New("node_url must include scheme and host")
 	}
-	if passport.ClientID == "" {
-		return errors.New("client_id is required when passport login is enabled")
+	if identity.ClientID == "" {
+		return errors.New("client_id is required when identity login is enabled")
 	}
 	return nil
 }
 
 // validateEmail 验证邮箱登录配置
 func (l *Loader) validateEmail(config *Config) error {
-	if !config.Email.Enabled {
-		return nil
-	}
-	if config.Email.SMTPHost == "" {
-		return errors.New("smtp_host is required when email login is enabled")
-	}
-	if config.Email.SMTPPort <= 0 || config.Email.SMTPPort > 65535 {
-		return errors.New("smtp_port is invalid")
-	}
-	if config.Email.From == "" {
-		return errors.New("from is required when email login is enabled")
-	}
 	if config.Email.CodeTTL <= 0 {
 		return errors.New("code_ttl must be positive")
 	}
@@ -643,11 +568,27 @@ func (l *Loader) validateEmail(config *Config) error {
 	if config.Email.CodeLength < 4 || config.Email.CodeLength > 10 {
 		return errors.New("code_length must be between 4 and 10")
 	}
-	if config.Email.TemplatePath == "" {
-		return errors.New("template_path is required when email login is enabled")
+	if config.Email.RequestTimeout <= 0 {
+		return errors.New("request_timeout must be positive")
 	}
-	if _, err := os.Stat(config.Email.TemplatePath); err != nil {
-		return fmt.Errorf("template_path not found: %w", err)
+	if !config.Email.NodeEmailEnabled {
+		return nil
+	}
+	if strings.TrimSpace(config.Email.NodeURL) == "" {
+		return errors.New("node_url is required when node email delivery is enabled")
+	}
+	parsed, err := url.Parse(config.Email.NodeURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return errors.New("node_url is invalid")
+	}
+	if strings.TrimSpace(config.Email.PusherAppID) == "" {
+		return errors.New("pusher_app_id is required when node email delivery is enabled")
+	}
+	if strings.TrimSpace(config.Email.PusherKey) == "" {
+		return errors.New("pusher_key is required when node email delivery is enabled")
+	}
+	if strings.TrimSpace(config.Email.PusherSecret) == "" {
+		return errors.New("pusher_secret is required when node email delivery is enabled")
 	}
 	return nil
 }

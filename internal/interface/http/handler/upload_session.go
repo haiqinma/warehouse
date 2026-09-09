@@ -43,12 +43,12 @@ func NewUploadSessionHandler(uploadService *service.UploadSessionService, logger
 
 func (h *UploadSessionHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		WriteErrorResponse(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 		return
 	}
 	u, ok := middleware.GetUserFromContext(r.Context())
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		WriteErrorResponse(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 		return
 	}
 	var req struct {
@@ -62,7 +62,7 @@ func (h *UploadSessionHandler) HandleCreate(w http.ResponseWriter, r *http.Reque
 		LastModified int64  `json:"lastModified"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		WriteErrorResponse(w, r, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
 		return
 	}
 	session, err := h.service.Create(r.Context(), u, service.UploadSessionCreateInput{
@@ -76,7 +76,7 @@ func (h *UploadSessionHandler) HandleCreate(w http.ResponseWriter, r *http.Reque
 		LastModified: req.LastModified,
 	})
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 		return
 	}
 	h.writeJSON(w, http.StatusCreated, buildUploadSessionResponse(session))
@@ -87,7 +87,7 @@ func (h *UploadSessionHandler) HandleItem(w http.ResponseWriter, r *http.Request
 	rest := strings.TrimPrefix(r.URL.Path, prefix)
 	parts := strings.Split(strings.Trim(rest, "/"), "/")
 	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
-		http.Error(w, "session id is required", http.StatusBadRequest)
+		WriteErrorResponse(w, r, http.StatusBadRequest, "INVALID_REQUEST", "session id is required")
 		return
 	}
 	id := parts[0]
@@ -101,24 +101,24 @@ func (h *UploadSessionHandler) HandleItem(w http.ResponseWriter, r *http.Request
 	case len(parts) == 3 && parts[1] == "parts" && r.Method == http.MethodPut:
 		partNumber, err := strconv.Atoi(parts[2])
 		if err != nil || partNumber < 1 {
-			http.Error(w, "invalid part number", http.StatusBadRequest)
+			WriteErrorResponse(w, r, http.StatusBadRequest, "INVALID_PART", "invalid part number")
 			return
 		}
 		h.handleUploadPart(w, r, id, partNumber)
 	default:
-		http.Error(w, "Not found", http.StatusNotFound)
+		WriteErrorResponse(w, r, http.StatusNotFound, "NOT_FOUND", "not found")
 	}
 }
 
 func (h *UploadSessionHandler) handleGet(w http.ResponseWriter, r *http.Request, id string) {
 	u, ok := middleware.GetUserFromContext(r.Context())
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		WriteErrorResponse(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 		return
 	}
 	session, err := h.service.Get(r.Context(), u, id)
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 		return
 	}
 	h.writeJSON(w, http.StatusOK, buildUploadSessionResponse(session))
@@ -128,17 +128,17 @@ func (h *UploadSessionHandler) handleUploadPart(w http.ResponseWriter, r *http.R
 	service.ClearUploadDeadlines(w, h.logger)
 	u, ok := middleware.GetUserFromContext(r.Context())
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		WriteErrorResponse(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 		return
 	}
 	checksum := uploadSessionPartChecksum(r)
 	if checksum == "" {
-		http.Error(w, "checksum is required", http.StatusBadRequest)
+		WriteErrorResponse(w, r, http.StatusBadRequest, "CHECKSUM_REQUIRED", "checksum is required")
 		return
 	}
 	session, part, err := h.service.UploadPart(r.Context(), u, id, partNumber, checksum, r.Body)
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 		return
 	}
 	h.writeJSON(w, http.StatusOK, map[string]any{
@@ -150,12 +150,12 @@ func (h *UploadSessionHandler) handleUploadPart(w http.ResponseWriter, r *http.R
 func (h *UploadSessionHandler) handleComplete(w http.ResponseWriter, r *http.Request, id string) {
 	u, ok := middleware.GetUserFromContext(r.Context())
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		WriteErrorResponse(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 		return
 	}
 	session, err := h.service.Complete(r.Context(), u, id)
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 		return
 	}
 	h.writeJSON(w, http.StatusOK, buildUploadSessionResponse(session))
@@ -164,11 +164,11 @@ func (h *UploadSessionHandler) handleComplete(w http.ResponseWriter, r *http.Req
 func (h *UploadSessionHandler) handleAbort(w http.ResponseWriter, r *http.Request, id string) {
 	u, ok := middleware.GetUserFromContext(r.Context())
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		WriteErrorResponse(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 		return
 	}
 	if err := h.service.Abort(r.Context(), u, id); err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 		return
 	}
 	h.writeJSON(w, http.StatusOK, map[string]bool{"aborted": true})
@@ -215,26 +215,26 @@ func uploadSessionPartChecksum(r *http.Request) string {
 	return strings.TrimSpace(r.Header.Get("x-amz-checksum-sha256"))
 }
 
-func (h *UploadSessionHandler) writeError(w http.ResponseWriter, err error) {
+func (h *UploadSessionHandler) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, service.ErrUploadSessionNotFound):
-		http.Error(w, "Not found", http.StatusNotFound)
+		WriteErrorResponse(w, r, http.StatusNotFound, "NOT_FOUND", "not found")
 	case errors.Is(err, service.ErrUploadSessionForbidden), errors.Is(err, auth.ErrAppScopeDenied), errors.Is(err, auth.ErrAppScopeRequired):
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		WriteErrorResponse(w, r, http.StatusForbidden, "FORBIDDEN", "forbidden")
 	case errors.Is(err, service.ErrUploadSessionTooLarge):
-		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+		WriteErrorResponse(w, r, http.StatusRequestEntityTooLarge, "QUOTA_EXCEEDED", err.Error())
 	case errors.Is(err, service.ErrUploadSessionChecksum):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		WriteErrorResponse(w, r, http.StatusBadRequest, "INVALID_CHECKSUM", err.Error())
 	case errors.Is(err, service.ErrUploadSessionInvalid):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		WriteErrorResponse(w, r, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	case errors.Is(err, shareuser.ErrShareNotFound):
-		http.Error(w, "Not found", http.StatusNotFound)
+		WriteErrorResponse(w, r, http.StatusNotFound, "NOT_FOUND", "not found")
 	case errors.Is(err, shareuser.ErrShareExpired):
-		http.Error(w, "share expired", http.StatusGone)
+		WriteErrorResponse(w, r, http.StatusGone, "SHARE_EXPIRED", "share expired")
 	default:
 		if h.logger != nil {
 			h.logger.Error("upload session error", zap.Error(err))
 		}
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		WriteErrorResponse(w, r, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	}
 }

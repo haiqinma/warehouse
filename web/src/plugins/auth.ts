@@ -321,7 +321,9 @@ export async function loginWithWallet(preferredAccount?: string): Promise<void> 
       storeToken: false,
       ...(preferredAccount ? { address: normalizeAddress(preferredAccount) } : {})
     })
-    applyLoginResult(result.response || {}, result.walletAddress || preferredAccount || '')
+    const response = result.response as Record<string, any> | undefined
+    const loginData = response?.data && typeof response.data === 'object' ? response.data : response || {}
+    applyLoginResult(loginData, result.walletAddress || preferredAccount || '')
   } catch (error) {
     throw new Error(formatWalletLoginError(error))
   }
@@ -399,7 +401,7 @@ export async function loginWithEmailCode(email: string, code: string): Promise<v
   applyLoginResult(payload?.data || {}, email)
 }
 
-export interface PassportLoginSession {
+export interface IdentityLoginSession {
   sessionId: string
   qrcodeUrl: string
   status: string
@@ -407,13 +409,13 @@ export interface PassportLoginSession {
   pollInterval: number
 }
 
-export interface PassportLoginStatus {
+export interface IdentityLoginStatus {
   status: string
   message?: string
   token?: string
 }
 
-function normalizePassportPayload(payload: any): any {
+function normalizeIdentityPayload(payload: any): any {
   if (payload?.code !== 0) {
     const dataCode = payload?.data?.code || payload?.data?.status
     const message = payload?.message || '通行证登录失败'
@@ -424,15 +426,15 @@ function normalizePassportPayload(payload: any): any {
   return payload?.data || {}
 }
 
-export async function createPassportLoginSession(): Promise<PassportLoginSession> {
-  const response = await fetch(`${AUTH_BASE}/passport/session`, {
+export async function createIdentityLoginSession(): Promise<IdentityLoginSession> {
+  const response = await fetch(`${AUTH_BASE}/identity/session`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'accept': 'application/json'
     }
   })
-  const payload = normalizePassportPayload(await response.json().catch(() => null))
+  const payload = normalizeIdentityPayload(await response.json().catch(() => null))
   const sessionId = payload.session_id || payload.sessionId || ''
   const qrcodeUrl = payload.qrcode_url || payload.qrcodeUrl || ''
   if (!response.ok || !sessionId || !qrcodeUrl) {
@@ -447,13 +449,13 @@ export async function createPassportLoginSession(): Promise<PassportLoginSession
   }
 }
 
-export async function pollPassportLoginStatus(sessionId: string): Promise<PassportLoginStatus> {
+export async function pollIdentityLoginStatus(sessionId: string): Promise<IdentityLoginStatus> {
   const query = new URLSearchParams({ session_id: sessionId })
-  const response = await fetch(`${AUTH_BASE}/passport/status?${query.toString()}`, {
+  const response = await fetch(`${AUTH_BASE}/identity/status?${query.toString()}`, {
     headers: { 'accept': 'application/json' }
   })
   const payload = await response.json().catch(() => null)
-  const data = normalizePassportPayload(payload)
+  const data = normalizeIdentityPayload(payload)
   if (!response.ok) {
     throw new Error(data?.message || payload?.message || `HTTP ${response.status}`)
   }

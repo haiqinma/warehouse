@@ -36,6 +36,7 @@ func (m *LoggerMiddleware) Handle(next http.Handler) http.Handler {
 		duration := time.Since(start)
 
 		fields := []zap.Field{
+			zap.String("request_id", RequestID(r.Context())),
 			zap.String("method", r.Method),
 			zap.String("path", r.URL.Path),
 			zap.String("if", r.Header.Get("If")),

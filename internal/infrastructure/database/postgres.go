@@ -68,6 +68,7 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 			id VARCHAR(50) PRIMARY KEY,
 			username VARCHAR(255) UNIQUE NOT NULL,
 			password TEXT,
+			identity_did VARCHAR(128) UNIQUE,
 			wallet_address VARCHAR(42) UNIQUE,
 			email VARCHAR(255) UNIQUE,
 			directory TEXT NOT NULL,
@@ -81,6 +82,10 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 		// 兼容旧表结构：新增 email 字段
 		`ALTER TABLE IF EXISTS users
 			ADD COLUMN IF NOT EXISTS email VARCHAR(255)`,
+
+		// 兼容旧表结构：新增 YeYing Identity DID 字段
+		`ALTER TABLE IF EXISTS users
+			ADD COLUMN IF NOT EXISTS identity_did VARCHAR(128)`,
 
 		// 创建用户规则表
 		`CREATE TABLE IF NOT EXISTS user_rules (
@@ -553,6 +558,9 @@ func (p *PostgresDB) Migrate(ctx context.Context) error {
 
 		// 创建钱包地址索引
 		`CREATE INDEX IF NOT EXISTS idx_users_wallet_address ON users(wallet_address) WHERE wallet_address IS NOT NULL`,
+
+		// 创建 Identity DID 索引
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_identity_did ON users(identity_did) WHERE identity_did IS NOT NULL`,
 
 		// 创建邮箱索引
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL`,

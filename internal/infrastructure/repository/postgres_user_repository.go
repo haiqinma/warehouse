@@ -23,7 +23,7 @@ func NewPostgresUserRepository(db *database.PostgresDB) (*PostgresUserRepository
 // FindByUsername 根据用户名查找用户
 func (r *PostgresUserRepository) FindByUsername(ctx context.Context, username string) (*user.User, error) {
 	query := `
-		SELECT id, username, password, wallet_address, email, directory, permissions,
+		SELECT id, username, password, identity_did, wallet_address, email, directory, permissions,
 		       quota, used_space, created_at, updated_at
 		FROM users
 		WHERE username = $1
@@ -31,6 +31,7 @@ func (r *PostgresUserRepository) FindByUsername(ctx context.Context, username st
 
 	u := &user.User{}
 	var walletAddress sql.NullString
+	var identityDID sql.NullString
 	var password sql.NullString
 	var email sql.NullString
 	var permissionsStr string
@@ -39,6 +40,7 @@ func (r *PostgresUserRepository) FindByUsername(ctx context.Context, username st
 		&u.ID,
 		&u.Username,
 		&password,
+		&identityDID,
 		&walletAddress,
 		&email,
 		&u.Directory,
@@ -57,6 +59,7 @@ func (r *PostgresUserRepository) FindByUsername(ctx context.Context, username st
 	}
 
 	u.Password = password.String
+	u.IdentityDID = identityDID.String
 	u.WalletAddress = walletAddress.String
 	u.Email = email.String
 	u.Permissions = user.ParsePermissions(permissionsStr)
@@ -74,7 +77,7 @@ func (r *PostgresUserRepository) FindByUsername(ctx context.Context, username st
 // FindByWalletAddress 根据钱包地址查找用户
 func (r *PostgresUserRepository) FindByWalletAddress(ctx context.Context, address string) (*user.User, error) {
 	query := `
-		SELECT id, username, password, wallet_address, email, directory, permissions,
+		SELECT id, username, password, identity_did, wallet_address, email, directory, permissions,
 		       quota, used_space, created_at, updated_at
 		FROM users
 		WHERE LOWER(wallet_address) = LOWER($1)
@@ -82,6 +85,7 @@ func (r *PostgresUserRepository) FindByWalletAddress(ctx context.Context, addres
 
 	u := &user.User{}
 	var walletAddress sql.NullString
+	var identityDID sql.NullString
 	var password sql.NullString
 	var email sql.NullString
 	var permissionsStr string
@@ -90,6 +94,7 @@ func (r *PostgresUserRepository) FindByWalletAddress(ctx context.Context, addres
 		&u.ID,
 		&u.Username,
 		&password,
+		&identityDID,
 		&walletAddress,
 		&email,
 		&u.Directory,
@@ -109,6 +114,7 @@ func (r *PostgresUserRepository) FindByWalletAddress(ctx context.Context, addres
 	}
 
 	u.Password = password.String
+	u.IdentityDID = identityDID.String
 	u.WalletAddress = walletAddress.String
 	u.Email = email.String
 	u.Permissions = user.ParsePermissions(permissionsStr)
@@ -126,7 +132,7 @@ func (r *PostgresUserRepository) FindByWalletAddress(ctx context.Context, addres
 // FindByEmail 根据邮箱查找用户
 func (r *PostgresUserRepository) FindByEmail(ctx context.Context, emailAddress string) (*user.User, error) {
 	query := `
-		SELECT id, username, password, wallet_address, email, directory, permissions,
+		SELECT id, username, password, identity_did, wallet_address, email, directory, permissions,
 		       quota, used_space, created_at, updated_at
 		FROM users
 		WHERE LOWER(email) = LOWER($1)
@@ -134,6 +140,7 @@ func (r *PostgresUserRepository) FindByEmail(ctx context.Context, emailAddress s
 
 	u := &user.User{}
 	var walletAddress sql.NullString
+	var identityDID sql.NullString
 	var password sql.NullString
 	var email sql.NullString
 	var permissionsStr string
@@ -142,6 +149,7 @@ func (r *PostgresUserRepository) FindByEmail(ctx context.Context, emailAddress s
 		&u.ID,
 		&u.Username,
 		&password,
+		&identityDID,
 		&walletAddress,
 		&email,
 		&u.Directory,
@@ -160,6 +168,7 @@ func (r *PostgresUserRepository) FindByEmail(ctx context.Context, emailAddress s
 	}
 
 	u.Password = password.String
+	u.IdentityDID = identityDID.String
 	u.WalletAddress = walletAddress.String
 	u.Email = email.String
 	u.Permissions = user.ParsePermissions(permissionsStr)
@@ -176,7 +185,7 @@ func (r *PostgresUserRepository) FindByEmail(ctx context.Context, emailAddress s
 // FindByID 根据ID查找用户
 func (r *PostgresUserRepository) FindByID(ctx context.Context, id string) (*user.User, error) {
 	query := `
-		SELECT id, username, password, wallet_address, email, directory, permissions,
+		SELECT id, username, password, identity_did, wallet_address, email, directory, permissions,
 		       quota, used_space, created_at, updated_at
 		FROM users
 		WHERE id = $1
@@ -184,6 +193,7 @@ func (r *PostgresUserRepository) FindByID(ctx context.Context, id string) (*user
 
 	u := &user.User{}
 	var walletAddress sql.NullString
+	var identityDID sql.NullString
 	var password sql.NullString
 	var email sql.NullString
 	var permissionsStr string
@@ -192,6 +202,7 @@ func (r *PostgresUserRepository) FindByID(ctx context.Context, id string) (*user
 		&u.ID,
 		&u.Username,
 		&password,
+		&identityDID,
 		&walletAddress,
 		&email,
 		&u.Directory,
@@ -210,6 +221,7 @@ func (r *PostgresUserRepository) FindByID(ctx context.Context, id string) (*user
 	}
 
 	u.Password = password.String
+	u.IdentityDID = identityDID.String
 	u.WalletAddress = walletAddress.String
 	u.Email = email.String
 	u.Permissions = user.ParsePermissions(permissionsStr)
@@ -244,6 +256,11 @@ func (r *PostgresUserRepository) Save(ctx context.Context, u *user.User) error {
 		walletAddress = &u.WalletAddress
 	}
 
+	var identityDID *string
+	if u.IdentityDID != "" {
+		identityDID = &u.IdentityDID
+	}
+
 	var email *string
 	if u.Email != "" {
 		email = &u.Email
@@ -258,13 +275,14 @@ func (r *PostgresUserRepository) Save(ctx context.Context, u *user.User) error {
 		// 更新用户
 		query := `
 			UPDATE users
-			SET username = $1, password = $2, wallet_address = $3, email = $4, directory = $5,
-			    permissions = $6, quota = $7, used_space = $8
-			WHERE id = $9
+			SET username = $1, password = $2, identity_did = $3, wallet_address = $4, email = $5, directory = $6,
+			    permissions = $7, quota = $8, used_space = $9
+			WHERE id = $10
 		`
 		_, err = tx.ExecContext(ctx, query,
 			u.Username,
 			password,
+			identityDID,
 			walletAddress,
 			email,
 			u.Directory,
@@ -276,13 +294,14 @@ func (r *PostgresUserRepository) Save(ctx context.Context, u *user.User) error {
 	} else {
 		// 插入新用户
 		query := `
-			INSERT INTO users (id, username, password, wallet_address, email, directory, permissions, quota, used_space, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			INSERT INTO users (id, username, password, identity_did, wallet_address, email, directory, permissions, quota, used_space, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		`
 		_, err = tx.ExecContext(ctx, query,
 			u.ID,
 			u.Username,
 			password,
+			identityDID,
 			walletAddress,
 			email,
 			u.Directory,
@@ -359,7 +378,7 @@ func (r *PostgresUserRepository) Delete(ctx context.Context, username string) er
 // List 列出所有用户
 func (r *PostgresUserRepository) List(ctx context.Context) ([]*user.User, error) {
 	query := `
-		SELECT id, username, password, wallet_address, email, directory, permissions,
+		SELECT id, username, password, identity_did, wallet_address, email, directory, permissions,
 		       quota, used_space, created_at, updated_at
 		FROM users
 		ORDER BY created_at DESC
@@ -376,6 +395,7 @@ func (r *PostgresUserRepository) List(ctx context.Context) ([]*user.User, error)
 	for rows.Next() {
 		u := &user.User{}
 		var walletAddress sql.NullString
+		var identityDID sql.NullString
 		var password sql.NullString
 		var email sql.NullString
 		var permissionsStr string
@@ -384,6 +404,7 @@ func (r *PostgresUserRepository) List(ctx context.Context) ([]*user.User, error)
 			&u.ID,
 			&u.Username,
 			&password,
+			&identityDID,
 			&walletAddress,
 			&email,
 			&u.Directory,
@@ -398,6 +419,7 @@ func (r *PostgresUserRepository) List(ctx context.Context) ([]*user.User, error)
 		}
 
 		u.Password = password.String
+		u.IdentityDID = identityDID.String
 		u.WalletAddress = walletAddress.String
 		u.Email = email.String
 		u.Permissions = user.ParsePermissions(permissionsStr)

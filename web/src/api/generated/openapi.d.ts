@@ -271,23 +271,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/public/webdav/user/update": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** 修改当前用户名 */
-        post: operations["updateCurrentUsername"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/public/webdav/user/password": {
         parameters: {
             query?: never;
@@ -1474,6 +1457,14 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        UnifiedError: {
+            /** @description 稳定错误码 */
+            error: string;
+            message: string;
+            /** @description HTTP 状态码 */
+            code: number;
+            requestId?: string;
+        };
         /** @example 0x9AdD99615252CaF379030d8966965BD9e5D80157 */
         WalletAddress: string;
         HealthResponse: {
@@ -1827,7 +1818,6 @@ export interface components {
         UpdateAdminUserRequest: {
             /** @description 待修改用户 */
             username: string;
-            new_username?: string;
             wallet_address?: components["schemas"]["WalletAddress"];
             /** Format: email */
             email?: string;
@@ -2048,6 +2038,15 @@ export interface components {
             };
             content: {
                 "text/plain": string;
+            };
+        };
+        /** @description 统一 JSON 错误响应 */
+        UnifiedError: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["UnifiedError"];
             };
         };
         /** @description 资产对象接口错误 */
@@ -2579,35 +2578,6 @@ export interface operations {
                 };
             };
             401: components["responses"]["LegacyError"];
-        };
-    };
-    updateCurrentUsername: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    username: string;
-                };
-            };
-        };
-        responses: {
-            /** @description 修改成功 */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            400: components["responses"]["LegacyError"];
         };
     };
     updateCurrentUserPassword: {
@@ -4228,9 +4198,9 @@ export interface operations {
                     "application/json": components["schemas"]["UploadSession"];
                 };
             };
-            400: components["responses"]["PlainTextError"];
-            403: components["responses"]["PlainTextError"];
-            413: components["responses"]["PlainTextError"];
+            400: components["responses"]["UnifiedError"];
+            403: components["responses"]["UnifiedError"];
+            413: components["responses"]["UnifiedError"];
         };
     };
     getUploadSession: {
@@ -4253,8 +4223,8 @@ export interface operations {
                     "application/json": components["schemas"]["UploadSession"];
                 };
             };
-            403: components["responses"]["PlainTextError"];
-            404: components["responses"]["PlainTextError"];
+            403: components["responses"]["UnifiedError"];
+            404: components["responses"]["UnifiedError"];
         };
     };
     abortUploadSession: {
@@ -4280,8 +4250,8 @@ export interface operations {
                     };
                 };
             };
-            403: components["responses"]["PlainTextError"];
-            404: components["responses"]["PlainTextError"];
+            403: components["responses"]["UnifiedError"];
+            404: components["responses"]["UnifiedError"];
         };
     };
     uploadSessionPart: {
@@ -4312,9 +4282,9 @@ export interface operations {
                     "application/json": components["schemas"]["UploadPartResponse"];
                 };
             };
-            400: components["responses"]["PlainTextError"];
-            403: components["responses"]["PlainTextError"];
-            404: components["responses"]["PlainTextError"];
+            400: components["responses"]["UnifiedError"];
+            403: components["responses"]["UnifiedError"];
+            404: components["responses"]["UnifiedError"];
         };
     };
     completeUploadSession: {
@@ -4337,9 +4307,9 @@ export interface operations {
                     "application/json": components["schemas"]["UploadSession"];
                 };
             };
-            400: components["responses"]["PlainTextError"];
-            403: components["responses"]["PlainTextError"];
-            404: components["responses"]["PlainTextError"];
+            400: components["responses"]["UnifiedError"];
+            403: components["responses"]["UnifiedError"];
+            404: components["responses"]["UnifiedError"];
         };
     };
 }

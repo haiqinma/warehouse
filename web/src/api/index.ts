@@ -114,15 +114,6 @@ export const userApi = {
     }>('/api/v1/public/webdav/user/info')
   },
 
-  updateUsername(username: string) {
-    return request<{
-      username: string
-    }>('/api/v1/public/webdav/user/update', {
-      method: 'POST',
-      body: { username }
-    })
-  },
-
   updatePassword(oldPassword: string | null, newPassword: string) {
     return request('/api/v1/public/webdav/user/password', {
       method: 'POST',

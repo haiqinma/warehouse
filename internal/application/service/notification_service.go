@@ -14,10 +14,34 @@ import (
 )
 
 type NotificationService struct {
-	repo      repository.NotificationRepository
-	userRepo  user.Repository
-	groupRepo repository.GroupRepository
-	logger    *zap.Logger
+	repo                 repository.NotificationRepository
+	userRepo             user.Repository
+	groupRepo            repository.GroupRepository
+	emailPublisher       NotificationEmailPublisher
+	quotaEmailTemplateID string
+	quotaWarnThreshold   float64
+	logger               *zap.Logger
+}
+
+type NotificationEmailPublisher interface {
+	PublishNotification(ctx context.Context, event NotificationEmailEvent) error
+}
+
+type NotificationEmailEvent struct {
+	EventID       string
+	Type          string
+	Source        string
+	Channels      []string
+	Recipients    []string
+	Title         string
+	Body          string
+	Level         string
+	SubjectType   string
+	SubjectID     string
+	Actor         string
+	Payload       map[string]any
+	Persist       bool
+	EmailRequired bool
 }
 
 type AnnouncementInput struct {
@@ -31,9 +55,11 @@ type AnnouncementInput struct {
 
 func NewNotificationService(repo repository.NotificationRepository, userRepo user.Repository, logger *zap.Logger) *NotificationService {
 	return &NotificationService{
-		repo:     repo,
-		userRepo: userRepo,
-		logger:   logger,
+		repo:                 repo,
+		userRepo:             userRepo,
+		quotaEmailTemplateID: "warehouse-storage-quota-warning",
+		quotaWarnThreshold:   80,
+		logger:               logger,
 	}
 }
 
@@ -42,6 +68,27 @@ func (s *NotificationService) SetGroupRepository(groupRepo repository.GroupRepos
 		return
 	}
 	s.groupRepo = groupRepo
+}
+
+func (s *NotificationService) SetEmailPublisher(emailPublisher NotificationEmailPublisher) {
+	if s == nil {
+		return
+	}
+	s.emailPublisher = emailPublisher
+}
+
+func (s *NotificationService) SetQuotaEmailTemplateID(templateID string) {
+	if s == nil || strings.TrimSpace(templateID) == "" {
+		return
+	}
+	s.quotaEmailTemplateID = strings.TrimSpace(templateID)
+}
+
+func (s *NotificationService) SetQuotaNotificationThresholdPercent(threshold float64) {
+	if s == nil || threshold <= 0 || threshold > 100 {
+		return
+	}
+	s.quotaWarnThreshold = threshold
 }
 
 func (s *NotificationService) ListForUser(ctx context.Context, u *user.User, limit int) ([]*notification.Notification, error) {
@@ -473,7 +520,7 @@ func (s *NotificationService) EnsureUserQuotaNotification(ctx context.Context, u
 		return nil
 	}
 	percent := float64(used) / float64(quotaValue) * 100
-	if percent < 90 {
+	if percent < s.quotaNotificationThreshold() {
 		return nil
 	}
 	severity := notification.SeverityWarning
@@ -482,7 +529,7 @@ func (s *NotificationService) EnsureUserQuotaNotification(ctx context.Context, u
 		severity = notification.SeverityError
 		title = "存储额度已超额"
 	}
-	return s.upsertForUserIfEnabled(ctx, u.ID, notification.CreateInput{
+	input := notification.CreateInput{
 		RecipientUserID: u.ID,
 		RecipientRole:   notification.RecipientRoleUser,
 		Type:            notification.TypeQuota,
@@ -491,7 +538,99 @@ func (s *NotificationService) EnsureUserQuotaNotification(ctx context.Context, u
 		Severity:        severity,
 		ActionURL:       "#quota",
 		DedupeKey:       fmt.Sprintf("quota:user:%s:%s", u.ID, severity),
-	})
+	}
+	if err := s.upsertForUserIfEnabled(ctx, u.ID, input); err != nil {
+		return err
+	}
+	s.publishQuotaEmail(ctx, u, input, quotaValue, used)
+	return nil
+}
+
+func (s *NotificationService) quotaNotificationThreshold() float64 {
+	if s == nil || s.quotaWarnThreshold <= 0 || s.quotaWarnThreshold > 100 {
+		return 80
+	}
+	return s.quotaWarnThreshold
+}
+
+func (s *NotificationService) publishQuotaEmail(ctx context.Context, u *user.User, input notification.CreateInput, quotaValue, used int64) {
+	if s == nil || s.emailPublisher == nil || u == nil {
+		return
+	}
+	recipient := quotaEmailSubject(u)
+	if recipient == "" {
+		return
+	}
+	remaining := quotaValue - used
+	if remaining < 0 {
+		remaining = 0
+	}
+	overage := used - quotaValue
+	if overage < 0 {
+		overage = 0
+	}
+	usagePercent := float64(used) / float64(quotaValue) * 100
+	storageUnit := quotaEmailStorageUnit(quotaValue)
+	payload := map[string]any{
+		"emailTemplateId":   s.quotaEmailTemplateID,
+		"appName":           "Warehouse",
+		"unit":              storageUnit,
+		"usedStorage":       formatStorageSize(used, storageUnit),
+		"storageQuota":      formatStorageSize(quotaValue, storageUnit),
+		"remainingStorage":  formatStorageSize(remaining, storageUnit),
+		"overageStorage":    formatStorageSize(overage, storageUnit),
+		"usagePercent":      fmt.Sprintf("%.2f", usagePercent),
+		"accountId":         recipient,
+		"usedStorageBytes":  used,
+		"storageQuotaBytes": quotaValue,
+	}
+	if err := s.emailPublisher.PublishNotification(ctx, NotificationEmailEvent{
+		EventID:       fmt.Sprintf("warehouse-storage-quota-%s-%s", u.ID, input.Severity),
+		Type:          "warehouse.storage.quota.warning",
+		Source:        "warehouse",
+		Channels:      []string{"public-warehouse"},
+		Recipients:    []string{recipient},
+		Title:         input.Title,
+		Body:          input.Content,
+		Level:         input.Severity,
+		SubjectType:   "warehouse_user",
+		SubjectID:     u.ID,
+		Payload:       payload,
+		Persist:       true,
+		EmailRequired: true,
+	}); err != nil && s.logger != nil {
+		s.logger.Warn("failed to publish quota email notification to node", zap.String("user_id", u.ID), zap.Error(err))
+	}
+}
+
+func formatGiB(value int64) string {
+	return fmt.Sprintf("%.2f", float64(value)/(1024*1024*1024))
+}
+
+func quotaEmailStorageUnit(quotaValue int64) string {
+	if quotaValue > 0 && quotaValue < 1024*1024*1024 {
+		return "MiB"
+	}
+	return "GiB"
+}
+
+func formatStorageSize(value int64, unit string) string {
+	switch unit {
+	case "MiB":
+		return fmt.Sprintf("%.2f", float64(value)/(1024*1024))
+	default:
+		return formatGiB(value)
+	}
+}
+
+func quotaEmailSubject(u *user.User) string {
+	if u == nil {
+		return ""
+	}
+	if did := strings.ToLower(strings.TrimSpace(u.IdentityDID)); strings.HasPrefix(did, "did:yeying:") {
+		return did
+	}
+	return strings.ToLower(strings.TrimSpace(u.WalletAddress))
 }
 
 func (s *NotificationService) EnsureAdminQuotaNotifications(ctx context.Context) error {
@@ -507,7 +646,7 @@ func (s *NotificationService) EnsureAdminQuotaNotifications(ctx context.Context)
 			continue
 		}
 		percent := float64(u.UsedSpace) / float64(u.Quota) * 100
-		if percent < 90 {
+		if percent < s.quotaNotificationThreshold() {
 			continue
 		}
 		severity := notification.SeverityWarning

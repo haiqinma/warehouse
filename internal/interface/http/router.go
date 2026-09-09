@@ -18,7 +18,7 @@ type Router struct {
 	healthHandler              *handler.HealthHandler
 	internalReplicationHandler *handler.InternalReplicationHandler
 	web3Handler                *handler.Web3Handler
-	passportHandler            *handler.PassportHandler
+	identityHandler            *handler.IdentityHandler
 	emailAuthHandler           *handler.EmailAuthHandler
 	assetsHandler              *handler.AssetsHandler
 	assetObjectHandler         *handler.AssetObjectHandler
@@ -44,7 +44,7 @@ func NewRouter(
 	healthHandler *handler.HealthHandler,
 	internalReplicationHandler *handler.InternalReplicationHandler,
 	web3Handler *handler.Web3Handler,
-	passportHandler *handler.PassportHandler,
+	identityHandler *handler.IdentityHandler,
 	emailAuthHandler *handler.EmailAuthHandler,
 	assetsHandler *handler.AssetsHandler,
 	assetObjectHandler *handler.AssetObjectHandler,
@@ -68,7 +68,7 @@ func NewRouter(
 		healthHandler:              healthHandler,
 		internalReplicationHandler: internalReplicationHandler,
 		web3Handler:                web3Handler,
-		passportHandler:            passportHandler,
+		identityHandler:            identityHandler,
 		emailAuthHandler:           emailAuthHandler,
 		assetsHandler:              assetsHandler,
 		assetObjectHandler:         assetObjectHandler,
@@ -110,12 +110,12 @@ func (r *Router) Setup() http.Handler {
 	mux.HandleFunc("/api/v1/public/auth/refresh", r.web3Handler.HandleRefresh)
 	mux.HandleFunc("/api/v1/public/auth/logout", r.web3Handler.HandleLogout)
 	mux.HandleFunc("/api/v1/public/auth/password/login", r.web3Handler.HandlePasswordLogin)
-	if r.passportHandler != nil {
-		mux.HandleFunc("/api/v1/public/auth/identity/login/session", r.passportHandler.HandleIdentityLoginSession)
-		mux.HandleFunc("/api/v1/public/auth/identity/login/verify", r.passportHandler.HandleIdentityLoginVerify)
-		mux.HandleFunc("/api/v1/public/auth/passport/session", r.passportHandler.HandleSession)
-		mux.HandleFunc("/api/v1/public/auth/passport/status", r.passportHandler.HandleStatus)
-		mux.HandleFunc("/api/v1/public/auth/passport/callback", r.passportHandler.HandleCallback)
+	if r.identityHandler != nil {
+		mux.HandleFunc("/api/v1/public/auth/identity/login/session", r.identityHandler.HandleIdentityLoginSession)
+		mux.HandleFunc("/api/v1/public/auth/identity/login/verify", r.identityHandler.HandleIdentityLoginVerify)
+		mux.HandleFunc("/api/v1/public/auth/identity/session", r.identityHandler.HandleSession)
+		mux.HandleFunc("/api/v1/public/auth/identity/status", r.identityHandler.HandleStatus)
+		mux.HandleFunc("/api/v1/public/auth/identity/callback", r.identityHandler.HandleCallback)
 	}
 	if r.emailAuthHandler != nil {
 		mux.HandleFunc("/api/v1/public/auth/email/code", r.emailAuthHandler.HandleSendCode)
@@ -133,7 +133,6 @@ func (r *Router) Setup() http.Handler {
 	}
 	mux.Handle("/api/v1/public/webdav/quota", r.createAuthenticatedHandler(http.HandlerFunc(r.quotaHandler.GetUserQuota)))
 	mux.Handle("/api/v1/public/webdav/user/info", r.createAuthenticatedHandler(http.HandlerFunc(r.userHandler.GetUserInfo)))
-	mux.Handle("/api/v1/public/webdav/user/update", r.createAuthenticatedHandler(http.HandlerFunc(r.userHandler.UpdateUsername)))
 	mux.Handle("/api/v1/public/webdav/user/password", r.createAuthenticatedHandler(http.HandlerFunc(r.userHandler.UpdatePassword)))
 	if r.notificationHandler != nil {
 		mux.Handle("/api/v1/public/notifications/list", r.createAuthenticatedHandler(http.HandlerFunc(r.notificationHandler.HandleList)))
@@ -257,6 +256,9 @@ func (r *Router) applyMiddlewares(handler http.Handler) http.Handler {
 	// 1. 恢复中间件（最外层）
 	recoveryMiddleware := middleware.NewRecoveryMiddleware(r.logger)
 	handler = recoveryMiddleware.Handle(handler)
+
+	// 请求关联标识必须在日志和处理器之前建立
+	handler = middleware.RequestIDMiddleware(handler)
 
 	// 2. 日志中间件
 	loggerMiddleware := middleware.NewLoggerMiddleware(r.logger, r.config.Security.BehindProxy)

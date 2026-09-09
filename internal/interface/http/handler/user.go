@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/yeying-community/warehouse/internal/domain/user"
 	"github.com/yeying-community/warehouse/internal/infrastructure/crypto"
@@ -100,70 +99,6 @@ func (h *UserHandler) canManageUsers(u *user.User) bool {
 	}
 	_, ok := h.adminAddresses[addr]
 	return ok
-}
-
-// UpdateUsername 更新用户名
-func (h *UserHandler) UpdateUsername(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		h.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	u, ok := middleware.GetUserFromContext(r.Context())
-	if !ok {
-		h.logger.Error("user not found in context")
-		h.writeError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-
-	var req struct {
-		Username string `json:"username"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.logger.Warn("invalid request body", zap.Error(err))
-		h.writeError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-
-	newName := strings.TrimSpace(req.Username)
-	if newName == "" {
-		h.writeError(w, http.StatusBadRequest, "Username is required")
-		return
-	}
-
-	current, err := h.userRepository.FindByID(r.Context(), u.ID)
-	if err != nil {
-		h.logger.Error("failed to find user", zap.Error(err))
-		h.writeError(w, http.StatusInternalServerError, "Failed to find user")
-		return
-	}
-
-	if current.Username == newName {
-		h.writeJSON(w, http.StatusOK, map[string]string{"username": current.Username})
-		return
-	}
-
-	// 保持目录不变，避免影响存储路径
-	originalDirectory := current.Directory
-	if originalDirectory == "" {
-		originalDirectory = current.Username
-	}
-
-	current.Username = newName
-	current.Directory = originalDirectory
-	current.UpdatedAt = time.Now()
-
-	if err := h.userRepository.Save(r.Context(), current); err != nil {
-		if err == user.ErrDuplicateUsername {
-			h.writeError(w, http.StatusConflict, "Username already exists")
-			return
-		}
-		h.logger.Error("failed to update username", zap.Error(err))
-		h.writeError(w, http.StatusInternalServerError, "Failed to update username")
-		return
-	}
-
-	h.writeJSON(w, http.StatusOK, map[string]string{"username": current.Username})
 }
 
 // UpdatePassword 设置/修改密码

@@ -7,7 +7,7 @@ info:
 
     WebDAV (`/dav/*`) 和独立 S3 Endpoint 是协议适配层，不在本 OpenAPI
     规范中逐操作重复定义。WebDAV 请参阅用户使用指南，S3 请参阅
-    `docs/S3设计方案.md`。
+    `docs/应用集成/S3协议.md`。
 servers:
   - url: https://warehouse.tidukongjian.com
     description: Production
@@ -424,28 +424,6 @@ paths:
                 type: object
                 additionalProperties: true
         "401":
-          $ref: "#/components/responses/LegacyError"
-  /api/v1/public/webdav/user/update:
-    post:
-      tags: [User]
-      operationId: updateCurrentUsername
-      summary: 修改当前用户名
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [username]
-              properties:
-                username: {type: string, minLength: 1}
-      responses:
-        "200":
-          description: 修改成功
-          content:
-            application/json:
-              schema: {type: object, additionalProperties: true}
-        "400":
           $ref: "#/components/responses/LegacyError"
   /api/v1/public/webdav/user/password:
     post:
@@ -1608,9 +1586,9 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/UploadSession"}
-        "400": {$ref: "#/components/responses/PlainTextError"}
-        "403": {$ref: "#/components/responses/PlainTextError"}
-        "413": {$ref: "#/components/responses/PlainTextError"}
+        "400": {$ref: "#/components/responses/UnifiedError"}
+        "403": {$ref: "#/components/responses/UnifiedError"}
+        "413": {$ref: "#/components/responses/UnifiedError"}
   /api/v1/public/uploads/sessions/{sessionId}:
     parameters:
       - {name: sessionId, in: path, required: true, schema: {type: string, format: uuid}}
@@ -1624,8 +1602,8 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/UploadSession"}
-        "403": {$ref: "#/components/responses/PlainTextError"}
-        "404": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/UnifiedError"}
+        "404": {$ref: "#/components/responses/UnifiedError"}
     delete:
       tags: [Upload sessions]
       operationId: abortUploadSession
@@ -1640,8 +1618,8 @@ paths:
                 required: [aborted]
                 properties:
                   aborted: {type: boolean, const: true}
-        "403": {$ref: "#/components/responses/PlainTextError"}
-        "404": {$ref: "#/components/responses/PlainTextError"}
+        "403": {$ref: "#/components/responses/UnifiedError"}
+        "404": {$ref: "#/components/responses/UnifiedError"}
   /api/v1/public/uploads/sessions/{sessionId}/parts/{partNumber}:
     put:
       tags: [Upload sessions]
@@ -1666,9 +1644,9 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/UploadPartResponse"}
-        "400": {$ref: "#/components/responses/PlainTextError"}
-        "403": {$ref: "#/components/responses/PlainTextError"}
-        "404": {$ref: "#/components/responses/PlainTextError"}
+        "400": {$ref: "#/components/responses/UnifiedError"}
+        "403": {$ref: "#/components/responses/UnifiedError"}
+        "404": {$ref: "#/components/responses/UnifiedError"}
   /api/v1/public/uploads/sessions/{sessionId}/complete:
     post:
       tags: [Upload sessions]
@@ -1682,9 +1660,9 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/UploadSession"}
-        "400": {$ref: "#/components/responses/PlainTextError"}
-        "403": {$ref: "#/components/responses/PlainTextError"}
-        "404": {$ref: "#/components/responses/PlainTextError"}
+        "400": {$ref: "#/components/responses/UnifiedError"}
+        "403": {$ref: "#/components/responses/UnifiedError"}
+        "404": {$ref: "#/components/responses/UnifiedError"}
 
 components:
   securitySchemes:
@@ -1761,6 +1739,11 @@ components:
       content:
         text/plain:
           schema: {type: string}
+    UnifiedError:
+      description: 统一 JSON 错误响应
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/UnifiedError"}
     AssetObjectError:
       description: 资产对象接口错误
       content:
@@ -1776,6 +1759,14 @@ components:
             properties:
               message: {type: string}
   schemas:
+    UnifiedError:
+      type: object
+      required: [error, message, code]
+      properties:
+        error: {type: string, description: 稳定错误码}
+        message: {type: string}
+        code: {type: integer, description: HTTP 状态码}
+        requestId: {type: string}
     WalletAddress:
       type: string
       pattern: "^0x[0-9a-fA-F]{40}$"
@@ -2225,7 +2216,6 @@ components:
       required: [username]
       properties:
         username: {type: string, minLength: 1, description: 待修改用户}
-        new_username: {type: string, minLength: 1}
         wallet_address: {$ref: "#/components/schemas/WalletAddress"}
         email: {type: string, format: email}
         directory: {type: string, minLength: 1}
