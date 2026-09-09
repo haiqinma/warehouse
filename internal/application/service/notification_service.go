@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/yeying-community/warehouse/internal/domain/group"
 	"github.com/yeying-community/warehouse/internal/domain/notification"
@@ -521,6 +522,9 @@ func (s *NotificationService) EnsureUserQuotaNotification(ctx context.Context, u
 	}
 	percent := float64(used) / float64(quotaValue) * 100
 	if percent < s.quotaNotificationThreshold() {
+		if err := s.repo.DismissByActionURLForUser(ctx, u.ID, quotaActionURL()); err != nil {
+			return err
+		}
 		return nil
 	}
 	severity := notification.SeverityWarning
@@ -529,6 +533,20 @@ func (s *NotificationService) EnsureUserQuotaNotification(ctx context.Context, u
 		severity = notification.SeverityError
 		title = "存储额度已超额"
 	}
+	active, err := s.repo.FindActiveForUserByTypeSeverityAction(ctx, u.ID, notification.TypeQuota, severity, quotaActionURL())
+	if err != nil {
+		return err
+	}
+	isNewEpisode := active == nil
+	dedupeKey := ""
+	if active != nil {
+		dedupeKey = active.DedupeKey
+	} else {
+		if err := s.repo.DismissByActionURLForUser(ctx, u.ID, quotaActionURL()); err != nil {
+			return err
+		}
+		dedupeKey = newQuotaNotificationDedupeKey(u.ID, severity)
+	}
 	input := notification.CreateInput{
 		RecipientUserID: u.ID,
 		RecipientRole:   notification.RecipientRoleUser,
@@ -536,14 +554,32 @@ func (s *NotificationService) EnsureUserQuotaNotification(ctx context.Context, u
 		Title:           title,
 		Content:         fmt.Sprintf("当前已使用 %.2f%%，请清理文件或联系管理员调整额度。", percent),
 		Severity:        severity,
-		ActionURL:       "#quota",
-		DedupeKey:       fmt.Sprintf("quota:user:%s:%s", u.ID, severity),
+		ActionURL:       quotaActionURL(),
+		DedupeKey:       dedupeKey,
 	}
 	if err := s.upsertForUserIfEnabled(ctx, u.ID, input); err != nil {
 		return err
 	}
-	s.publishQuotaEmail(ctx, u, input, quotaValue, used)
+	if isNewEpisode {
+		s.publishQuotaEmail(ctx, u, input, quotaValue, used)
+	}
 	return nil
+}
+
+func quotaActionURL() string {
+	return "#quota"
+}
+
+func newQuotaNotificationDedupeKey(userID, severity string) string {
+	return fmt.Sprintf("quota:user:%s:%s:%s", strings.TrimSpace(userID), strings.TrimSpace(severity), time.Now().UTC().Format("20060102150405.000000000"))
+}
+
+func quotaEmailEventID(dedupeKey string) string {
+	parts := strings.Split(strings.TrimSpace(dedupeKey), ":")
+	if len(parts) >= 5 {
+		return fmt.Sprintf("warehouse-storage-quota-%s-%s-%s", parts[2], parts[3], strings.ReplaceAll(parts[4], ".", ""))
+	}
+	return "warehouse-storage-quota-" + strings.NewReplacer(":", "-", ".", "").Replace(strings.TrimSpace(dedupeKey))
 }
 
 func (s *NotificationService) quotaNotificationThreshold() float64 {
@@ -585,7 +621,7 @@ func (s *NotificationService) publishQuotaEmail(ctx context.Context, u *user.Use
 		"storageQuotaBytes": quotaValue,
 	}
 	if err := s.emailPublisher.PublishNotification(ctx, NotificationEmailEvent{
-		EventID:       fmt.Sprintf("warehouse-storage-quota-%s-%s", u.ID, input.Severity),
+		EventID:       quotaEmailEventID(input.DedupeKey),
 		Type:          "warehouse.storage.quota.warning",
 		Source:        "warehouse",
 		Channels:      []string{"public-warehouse"},

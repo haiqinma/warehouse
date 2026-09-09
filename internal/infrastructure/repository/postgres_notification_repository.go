@@ -13,6 +13,7 @@ import (
 type NotificationRepository interface {
 	Create(ctx context.Context, item *notification.Notification) error
 	UpsertByDedupeKey(ctx context.Context, item *notification.Notification) error
+	FindActiveForUserByTypeSeverityAction(ctx context.Context, userID, notificationType, severity, actionURL string) (*notification.Notification, error)
 	ListForUser(ctx context.Context, userID string, limit int) ([]*notification.Notification, error)
 	ListForRole(ctx context.Context, role string, limit int) ([]*notification.Notification, error)
 	UnreadCountForUser(ctx context.Context, userID string) (int, error)
@@ -97,6 +98,33 @@ func (r *PostgresNotificationRepository) UpsertByDedupeKey(ctx context.Context, 
 		return fmt.Errorf("failed to upsert notification: %w", err)
 	}
 	return nil
+}
+
+func (r *PostgresNotificationRepository) FindActiveForUserByTypeSeverityAction(ctx context.Context, userID, notificationType, severity, actionURL string) (*notification.Notification, error) {
+	query := `
+		SELECT id, recipient_user_id, recipient_role, type, title, content, severity, action_url, dedupe_key, read_at, created_at, expires_at
+		FROM notifications
+		WHERE recipient_user_id = $1
+			AND type = $2
+			AND severity = $3
+			AND action_url = $4
+			AND (expires_at IS NULL OR expires_at > NOW())
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+	rows, err := r.db.QueryContext(ctx, query, userID, notificationType, severity, actionURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find active notification: %w", err)
+	}
+	defer rows.Close()
+	items, err := scanNotifications(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	return items[0], nil
 }
 
 func (r *PostgresNotificationRepository) ListForUser(ctx context.Context, userID string, limit int) ([]*notification.Notification, error) {
