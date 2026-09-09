@@ -77,10 +77,11 @@ type ReplicationConfig struct {
 
 // QuotaConfig 配额后台巡检配置
 type QuotaConfig struct {
-	AutoReconcileEnabled    bool          `yaml:"auto_reconcile_enabled"`
-	AutoReconcileInterval   time.Duration `yaml:"auto_reconcile_interval"`
-	AutoReconcileBatchSize  int           `yaml:"auto_reconcile_batch_size"`
-	AutoReconcileBatchPause time.Duration `yaml:"auto_reconcile_batch_pause"`
+	AutoReconcileEnabled         bool          `yaml:"auto_reconcile_enabled"`
+	AutoReconcileInterval        time.Duration `yaml:"auto_reconcile_interval"`
+	AutoReconcileBatchSize       int           `yaml:"auto_reconcile_batch_size"`
+	AutoReconcileBatchPause      time.Duration `yaml:"auto_reconcile_batch_pause"`
+	NotificationThresholdPercent float64       `yaml:"notification_threshold_percent"`
 }
 
 // S3Config controls the optional S3-compatible endpoint. Values in the YAML
@@ -131,20 +132,18 @@ type IdentityConfig struct {
 
 // EmailConfig 邮箱验证码登录配置
 type EmailConfig struct {
-	Enabled            bool          `yaml:"enabled"`
-	SMTPHost           string        `yaml:"smtp_host"`
-	SMTPPort           int           `yaml:"smtp_port"`
-	SMTPUsername       string        `yaml:"smtp_username"`
-	SMTPPassword       string        `yaml:"smtp_password"`
-	From               string        `yaml:"from"`
-	FromName           string        `yaml:"from_name"`
-	TemplatePath       string        `yaml:"template_path"`
-	CodeTTL            time.Duration `yaml:"code_ttl"`
-	SendInterval       time.Duration `yaml:"send_interval"`
-	CodeLength         int           `yaml:"code_length"`
-	AutoCreateOnLogin  bool          `yaml:"auto_create_on_login"`
-	UseTLS             bool          `yaml:"use_tls"`
-	InsecureSkipVerify bool          `yaml:"insecure_skip_verify"`
+	Enabled                bool          `yaml:"enabled"`
+	NodeEmailEnabled       bool          `yaml:"node_email_enabled"`
+	NodeURL                string        `yaml:"node_url"`
+	PusherAppID            string        `yaml:"pusher_app_id"`
+	PusherKey              string        `yaml:"pusher_key"`
+	PusherSecret           string        `yaml:"pusher_secret"`
+	RequestTimeout         time.Duration `yaml:"request_timeout"`
+	QuotaWarningTemplateID string        `yaml:"quota_warning_template_id"`
+	CodeTTL                time.Duration `yaml:"code_ttl"`
+	SendInterval           time.Duration `yaml:"send_interval"`
+	CodeLength             int           `yaml:"code_length"`
+	AutoCreateOnLogin      bool          `yaml:"auto_create_on_login"`
 }
 
 // UCANConfig UCAN authentication configuration
@@ -242,10 +241,11 @@ func DefaultConfig() *Config {
 			ReconcileJobRetention:      30 * 24 * time.Hour,
 		},
 		Quota: QuotaConfig{
-			AutoReconcileEnabled:    false,
-			AutoReconcileInterval:   6 * time.Hour,
-			AutoReconcileBatchSize:  100,
-			AutoReconcileBatchPause: 0,
+			AutoReconcileEnabled:         false,
+			AutoReconcileInterval:        6 * time.Hour,
+			AutoReconcileBatchSize:       100,
+			AutoReconcileBatchPause:      0,
+			NotificationThresholdPercent: 80,
 		},
 		S3: S3Config{
 			Enabled:         false,
@@ -282,20 +282,14 @@ func DefaultConfig() *Config {
 			IdentityTrustDir: "/data/node",
 		},
 		Email: EmailConfig{
-			Enabled:            false,
-			SMTPHost:           "",
-			SMTPPort:           587,
-			SMTPUsername:       "",
-			SMTPPassword:       "",
-			From:               "",
-			FromName:           "Warehouse",
-			TemplatePath:       "resources/email/email_code_login_mail_template_zh-CN.html",
-			CodeTTL:            5 * time.Minute,
-			SendInterval:       60 * time.Second,
-			CodeLength:         6,
-			AutoCreateOnLogin:  true,
-			UseTLS:             false,
-			InsecureSkipVerify: false,
+			Enabled:                false,
+			NodeEmailEnabled:       false,
+			RequestTimeout:         10 * time.Second,
+			QuotaWarningTemplateID: "warehouse-storage-quota-warning",
+			CodeTTL:                5 * time.Minute,
+			SendInterval:           60 * time.Second,
+			CodeLength:             6,
+			AutoCreateOnLogin:      true,
 		},
 		Security: SecurityConfig{
 			NoPassword:     false,

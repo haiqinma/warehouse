@@ -284,56 +284,6 @@ func (l *Loader) overrideFromEnv(config *Config) {
 		config.Security.AdminAddresses = strings.Split(v, ",")
 	}
 
-	if v := os.Getenv("WEBDAV_EMAIL_ENABLED"); v != "" {
-		config.Email.Enabled = parseEnvBool(v)
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_SMTP_HOST"); v != "" {
-		config.Email.SMTPHost = v
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_SMTP_PORT"); v != "" {
-		if port, err := strconv.Atoi(v); err == nil {
-			config.Email.SMTPPort = port
-		}
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_SMTP_USERNAME"); v != "" {
-		config.Email.SMTPUsername = v
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_SMTP_PASSWORD"); v != "" {
-		config.Email.SMTPPassword = v
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_FROM"); v != "" {
-		config.Email.From = v
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_FROM_NAME"); v != "" {
-		config.Email.FromName = v
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_TEMPLATE_PATH"); v != "" {
-		config.Email.TemplatePath = v
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_CODE_TTL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			config.Email.CodeTTL = d
-		}
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_SEND_INTERVAL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			config.Email.SendInterval = d
-		}
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_CODE_LENGTH"); v != "" {
-		if length, err := strconv.Atoi(v); err == nil {
-			config.Email.CodeLength = length
-		}
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_AUTO_CREATE_ON_LOGIN"); v != "" {
-		config.Email.AutoCreateOnLogin = parseEnvBool(v)
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_USE_TLS"); v != "" {
-		config.Email.UseTLS = parseEnvBool(v)
-	}
-	if v := os.Getenv("WEBDAV_EMAIL_INSECURE_SKIP_VERIFY"); v != "" {
-		config.Email.InsecureSkipVerify = parseEnvBool(v)
-	}
 }
 
 func parseEnvBool(value string) bool {
@@ -383,6 +333,9 @@ func (l *Loader) validate(config *Config) error {
 }
 
 func (l *Loader) validateQuota(config *Config) error {
+	if config.Quota.NotificationThresholdPercent <= 0 || config.Quota.NotificationThresholdPercent > 100 {
+		return errors.New("quota.notification_threshold_percent must be greater than 0 and less than or equal to 100")
+	}
 	if !config.Quota.AutoReconcileEnabled {
 		return nil
 	}
@@ -606,18 +559,6 @@ func (l *Loader) validateIdentity(config *Config) error {
 
 // validateEmail 验证邮箱登录配置
 func (l *Loader) validateEmail(config *Config) error {
-	if !config.Email.Enabled {
-		return nil
-	}
-	if config.Email.SMTPHost == "" {
-		return errors.New("smtp_host is required when email login is enabled")
-	}
-	if config.Email.SMTPPort <= 0 || config.Email.SMTPPort > 65535 {
-		return errors.New("smtp_port is invalid")
-	}
-	if config.Email.From == "" {
-		return errors.New("from is required when email login is enabled")
-	}
 	if config.Email.CodeTTL <= 0 {
 		return errors.New("code_ttl must be positive")
 	}
@@ -627,11 +568,27 @@ func (l *Loader) validateEmail(config *Config) error {
 	if config.Email.CodeLength < 4 || config.Email.CodeLength > 10 {
 		return errors.New("code_length must be between 4 and 10")
 	}
-	if config.Email.TemplatePath == "" {
-		return errors.New("template_path is required when email login is enabled")
+	if config.Email.RequestTimeout <= 0 {
+		return errors.New("request_timeout must be positive")
 	}
-	if _, err := os.Stat(config.Email.TemplatePath); err != nil {
-		return fmt.Errorf("template_path not found: %w", err)
+	if !config.Email.NodeEmailEnabled {
+		return nil
+	}
+	if strings.TrimSpace(config.Email.NodeURL) == "" {
+		return errors.New("node_url is required when node email delivery is enabled")
+	}
+	parsed, err := url.Parse(config.Email.NodeURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return errors.New("node_url is invalid")
+	}
+	if strings.TrimSpace(config.Email.PusherAppID) == "" {
+		return errors.New("pusher_app_id is required when node email delivery is enabled")
+	}
+	if strings.TrimSpace(config.Email.PusherKey) == "" {
+		return errors.New("pusher_key is required when node email delivery is enabled")
+	}
+	if strings.TrimSpace(config.Email.PusherSecret) == "" {
+		return errors.New("pusher_secret is required when node email delivery is enabled")
 	}
 	return nil
 }

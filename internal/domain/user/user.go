@@ -28,6 +28,7 @@ type User struct {
 	ID            string
 	Username      string
 	Password      string // 加密后的密码
+	IdentityDID   string // YeYing Identity DID
 	WalletAddress string // 以太坊钱包地址
 	Email         string
 	Directory     string

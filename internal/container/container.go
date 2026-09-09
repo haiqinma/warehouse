@@ -370,6 +370,9 @@ func (c *Container) initServices() error {
 	// 站内消息服务
 	c.NotificationService = service.NewNotificationService(c.NotificationRepo, c.UserRepository, c.Logger)
 	c.NotificationService.SetGroupRepository(c.GroupRepository)
+	c.NotificationService.SetQuotaNotificationThresholdPercent(c.Config.Quota.NotificationThresholdPercent)
+	c.NotificationService.SetQuotaEmailTemplateID(c.Config.Email.QuotaWarningTemplateID)
+	c.NotificationService.SetEmailPublisher(infraEmail.NewSender(c.Config.Email, c.Logger))
 	c.GroupService.SetNotificationService(c.NotificationService)
 	if c.QuotaReconciler != nil {
 		c.QuotaReconciler.SetNotificationService(c.NotificationService)

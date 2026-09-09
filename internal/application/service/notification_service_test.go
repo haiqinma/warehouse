@@ -114,6 +114,114 @@ func TestNotificationServiceDismissesInviteAfterApproveAndReject(t *testing.T) {
 	}
 }
 
+func TestNotificationServicePublishesQuotaEmailToNode(t *testing.T) {
+	ctx := context.Background()
+	notificationRepo := newFakeNotificationRepository()
+	userRepo := newTestUserRepo()
+	publisher := &recordingEmailPublisher{}
+	svc := NewNotificationService(notificationRepo, userRepo, nil)
+	svc.SetEmailPublisher(publisher)
+
+	u := &user.User{
+		ID:            "1001",
+		Username:      "alice",
+		IdentityDID:   "did:yeying:wid_1234567890123456789012",
+		WalletAddress: "0x1111111111111111111111111111111111111111",
+		Quota:         10 * 1024 * 1024 * 1024,
+		UsedSpace:     11 * 1024 * 1024 * 1024,
+	}
+	if err := svc.EnsureUserQuotaNotification(ctx, u, u.Quota, u.UsedSpace); err != nil {
+		t.Fatalf("EnsureUserQuotaNotification() error = %v", err)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("published events = %d, want 1", len(publisher.events))
+	}
+	event := publisher.events[0]
+	if event.Type != "warehouse.storage.quota.warning" {
+		t.Fatalf("event type = %q", event.Type)
+	}
+	if event.EventID != "warehouse-storage-quota-1001-error" {
+		t.Fatalf("event id = %q", event.EventID)
+	}
+	if len(event.Recipients) != 1 || event.Recipients[0] != strings.ToLower(u.IdentityDID) {
+		t.Fatalf("recipients = %#v", event.Recipients)
+	}
+	if event.Payload["emailTemplateId"] != "warehouse-storage-quota-warning" {
+		t.Fatalf("template id = %#v", event.Payload["emailTemplateId"])
+	}
+	if event.Payload["usedStorage"] != "11.00" || event.Payload["storageQuota"] != "10.00" || event.Payload["remainingStorage"] != "0.00" || event.Payload["overageStorage"] != "1.00" || event.Payload["usagePercent"] != "110.00" {
+		t.Fatalf("unexpected balance payload: %#v", event.Payload)
+	}
+	if event.Payload["accountId"] != strings.ToLower(u.IdentityDID) {
+		t.Fatalf("accountId = %#v", event.Payload["accountId"])
+	}
+}
+
+func TestNotificationServiceQuotaThresholdIsConfigurable(t *testing.T) {
+	ctx := context.Background()
+	notificationRepo := newFakeNotificationRepository()
+	userRepo := newTestUserRepo()
+	svc := NewNotificationService(notificationRepo, userRepo, nil)
+	svc.SetQuotaNotificationThresholdPercent(80)
+
+	u := &user.User{ID: "1002", Username: "kobofare", WalletAddress: "0x2222222222222222222222222222222222222222"}
+	if err := svc.EnsureUserQuotaNotification(ctx, u, 300*1024*1024, 237*1024*1024); err != nil {
+		t.Fatalf("EnsureUserQuotaNotification(79%%) error = %v", err)
+	}
+	if len(notificationRepo.items) != 0 {
+		t.Fatalf("79%% usage created %d notifications, want 0", len(notificationRepo.items))
+	}
+	if err := svc.EnsureUserQuotaNotification(ctx, u, 300*1024*1024, 240*1024*1024); err != nil {
+		t.Fatalf("EnsureUserQuotaNotification(80%%) error = %v", err)
+	}
+	if len(notificationRepo.items) != 1 {
+		t.Fatalf("80%% usage created %d notifications, want 1", len(notificationRepo.items))
+	}
+}
+
+func TestNotificationServicePublishesSmallQuotaEmailInMiB(t *testing.T) {
+	ctx := context.Background()
+	notificationRepo := newFakeNotificationRepository()
+	userRepo := newTestUserRepo()
+	publisher := &recordingEmailPublisher{}
+	svc := NewNotificationService(notificationRepo, userRepo, nil)
+	svc.SetEmailPublisher(publisher)
+
+	u := &user.User{
+		ID:            "1002",
+		Username:      "kobofare",
+		IdentityDID:   "did:yeying:wid_oqprg0sjy7ja8fvd7dtvbg",
+		WalletAddress: "0x5c7bf91c493126314bb821c123dee889ffca3932",
+		Quota:         314572800,
+		UsedSpace:     287961639,
+	}
+	if err := svc.EnsureUserQuotaNotification(ctx, u, u.Quota, u.UsedSpace); err != nil {
+		t.Fatalf("EnsureUserQuotaNotification() error = %v", err)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("published events = %d, want 1", len(publisher.events))
+	}
+	payload := publisher.events[0].Payload
+	if payload["unit"] != "MiB" || payload["usedStorage"] != "274.62" || payload["storageQuota"] != "300.00" || payload["remainingStorage"] != "25.38" || payload["overageStorage"] != "0.00" || payload["usagePercent"] != "91.54" {
+		t.Fatalf("unexpected quota payload: %#v", payload)
+	}
+}
+
+type recordingEmailPublisher struct {
+	events []NotificationEmailEvent
+}
+
+func (p *recordingEmailPublisher) PublishNotification(_ context.Context, event NotificationEmailEvent) error {
+	copyEvent := event
+	copyEvent.Recipients = append([]string(nil), event.Recipients...)
+	copyEvent.Payload = map[string]any{}
+	for key, value := range event.Payload {
+		copyEvent.Payload[key] = value
+	}
+	p.events = append(p.events, copyEvent)
+	return nil
+}
+
 type fakeNotificationRepository struct {
 	items []*notification.Notification
 }

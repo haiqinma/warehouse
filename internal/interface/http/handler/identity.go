@@ -591,8 +591,19 @@ func (h *IdentityHandler) applyIdentityUsername(ctx context.Context, currentUser
 }
 
 func (h *IdentityHandler) ensureIdentityUser(ctx context.Context, address string, data map[string]any) (*user.User, error) {
+	did := strings.ToLower(strings.TrimSpace(firstString(data, "did")))
+	if !isYeyingIdentityDID(did) {
+		return nil, fmt.Errorf("identity did is invalid")
+	}
 	currentUser, err := h.userRepo.FindByWalletAddress(ctx, address)
 	if err == nil {
+		if strings.TrimSpace(currentUser.IdentityDID) != did {
+			currentUser.IdentityDID = did
+			currentUser.UpdatedAt = time.Now()
+			if err := h.userRepo.Save(ctx, currentUser); err != nil {
+				return nil, err
+			}
+		}
 		return currentUser, nil
 	}
 	if !errors.Is(err, user.ErrUserNotFound) {
@@ -609,6 +620,7 @@ func (h *IdentityHandler) ensureIdentityUser(ctx context.Context, address string
 	email := strings.ToLower(strings.TrimSpace(extractCredentialSubjectString(data, "EmailCredential", "email")))
 
 	currentUser = user.NewUser(username, username)
+	currentUser.IdentityDID = did
 	if err := currentUser.SetWalletAddress(address); err != nil {
 		return nil, err
 	}

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,7 +128,7 @@ func TestIdentityLoginVerifyUsesLocalTrustBundle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find created user: %v", err)
 	}
-	if created.Username != "walletuser" || created.Email != "wallet@example.com" {
+	if created.Username != "walletuser" || created.Email != "wallet@example.com" || created.IdentityDID != strings.ToLower(did) {
 		t.Fatalf("created user = %#v", created)
 	}
 }
@@ -190,7 +191,7 @@ func TestIdentityLoginVerifyOverwritesExistingWarehouseUsername(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Username != "walletuser" {
+	if updated.Username != "walletuser" || updated.IdentityDID != strings.ToLower(did) {
 		t.Fatalf("stored username = %q", updated.Username)
 	}
 }

@@ -56,6 +56,7 @@ quota:
   auto_reconcile_interval: 6h   # 自动对账周期；只在非 standby 节点运行，启动时也会先执行一轮
   auto_reconcile_batch_size: 100 # 每批扫描用户数；用于控制单轮对账资源占用
   auto_reconcile_batch_pause: 0s # 批间暂停；0 表示不额外暂停
+  notification_threshold_percent: 80 # 用户额度使用率达到该百分比后生成站内通知并触发 Node 邮件通知
                                 # 对账口径 = 用户目录实际文件大小 + recycle_items 中该用户回收站记录大小
                                 # 建议：单机或小规模先用 6h；用户量较大时再按负载调大
 
@@ -119,22 +120,20 @@ identity:
   session_ttl: 5m
   identity_trust_dir: "/data/node"
 
-# Email Login Configuration
+# Email / Notification Delivery Configuration
 email:
   enabled: false
-  smtp_host: "smtp.example.com"
-  smtp_port: 587
-  smtp_username: ""
-  smtp_password: ""
-  from: "noreply@example.com"
-  from_name: "Warehouse"
-  template_path: "resources/email/email_code_login_mail_template_zh-CN.html"
+  node_email_enabled: false
+  node_url: "https://identity.yeying.pub"
+  pusher_app_id: "warehouse"
+  pusher_key: ""
+  pusher_secret: ""
+  request_timeout: 10s
+  quota_warning_template_id: "warehouse-storage-quota-warning"
   code_ttl: 5m
   send_interval: 60s
   code_length: 6
   auto_create_on_login: true
-  use_tls: false
-  insecure_skip_verify: false
 
 # Security Configuration
 security:
