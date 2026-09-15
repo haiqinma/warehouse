@@ -9,6 +9,7 @@ import {
   isPathInsideEncryptedRoot,
   normalizeDirectoryPath,
   normalizeDirectoryRoot,
+  removeEncryptedRootsForDeletedPath,
   resolveEncryptedRoot,
   setEncryptedDirectoryPassword
 } from '@/utils/encryptedDirectory'
@@ -80,6 +81,7 @@ describe('encryptedDirectory helpers', () => {
     expect(isPathInsideEncryptedRoot('/secure/file.txt', '/secure')).toBe(true)
     expect(isPathInsideEncryptedRoot('/secure/nested/file.txt', '/secure')).toBe(true)
     expect(isPathInsideEncryptedRoot('/plain/file.txt', '/secure')).toBe(false)
+    expect(isPathInsideEncryptedRoot('/secure-v2/file.txt', '/secure')).toBe(false)
     expect(isPathInsideEncryptedRoot('/anything', '/')).toBe(true)
   })
 
@@ -89,7 +91,22 @@ describe('encryptedDirectory helpers', () => {
     expect(resolveEncryptedRoot('/secure/nested/file.txt', roots)).toBe('/secure/nested')
     expect(resolveEncryptedRoot('/secure/other/file.txt', roots)).toBe('/secure')
     expect(resolveEncryptedRoot('/archive/file.txt', roots)).toBe('/archive')
+    expect(resolveEncryptedRoot('/secure-v2/file.txt', ['/secure', '/archive'])).toBeNull()
     expect(resolveEncryptedRoot('/unknown/file.txt', ['/secure', '/archive'])).toBeNull()
+  })
+
+  it('removes encrypted roots covered by a deleted directory', () => {
+    const roots = ['/secure', '/secure/nested', '/archive', '/secure']
+
+    expect(removeEncryptedRootsForDeletedPath(roots, '/secure')).toEqual(['/archive'])
+    expect(resolveEncryptedRoot('/secure/file.txt', removeEncryptedRootsForDeletedPath(roots, '/secure'))).toBeNull()
+    expect(removeEncryptedRootsForDeletedPath(roots, '/')).toEqual([])
+  })
+
+  it('keeps sibling encrypted roots when removing a deleted directory', () => {
+    const roots = ['/secure', '/secure-v2', '/archive/secure']
+
+    expect(removeEncryptedRootsForDeletedPath(roots, '/secure')).toEqual(['/secure-v2', '/archive/secure'])
   })
 
   it('caches encrypted directory passwords by normalized root', () => {

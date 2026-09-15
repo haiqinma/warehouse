@@ -19,6 +19,7 @@ import {
   getEncryptedDirectoryPassword,
   isEncryptedDirectoryMetadataFileName,
   normalizeEncryptedDirectoryPasswordSource,
+  removeEncryptedRootsForDeletedPath,
   resolveEncryptedRoot,
   setEncryptedDirectoryPassword
 } from '@/utils/encryptedDirectory'
@@ -1052,6 +1053,43 @@ function registerEncryptedDirectoryRoot(path: string, metadata?: EncryptedDirect
       [normalized]: normalizeEncryptedDirectoryMetadata(metadata)
     }
   }
+}
+
+function unregisterEncryptedDirectoryRootsForDeletedPath(path: string) {
+  const before = encryptedDirectoryRoots.value.map(item => normalizeEncryptedRootPath(item))
+  const after = removeEncryptedRootsForDeletedPath(before, path)
+  if (after.length === before.length && after.every((item, index) => item === before[index])) {
+    return
+  }
+  const afterSet = new Set(after)
+  encryptedDirectoryRoots.value = after
+  const nextMetadata: Record<string, EncryptedDirectoryMetadata> = {}
+  for (const [root, metadata] of Object.entries(encryptedDirectoryMetadata.value)) {
+    const normalizedRoot = normalizeEncryptedRootPath(root)
+    if (afterSet.has(normalizedRoot)) {
+      nextMetadata[normalizedRoot] = metadata
+    } else {
+      setEncryptedDirectoryPassword(normalizedRoot, '')
+    }
+  }
+  for (const root of before) {
+    if (!afterSet.has(root)) {
+      setEncryptedDirectoryPassword(root, '')
+    }
+  }
+  encryptedDirectoryMetadata.value = nextMetadata
+}
+
+function unregisterExactEncryptedDirectoryRoot(path: string) {
+  const normalized = normalizeEncryptedRootPath(path)
+  if (!encryptedDirectoryRoots.value.includes(normalized) && !encryptedDirectoryMetadata.value[normalized]) {
+    setEncryptedDirectoryPassword(normalized, '')
+    return
+  }
+  encryptedDirectoryRoots.value = encryptedDirectoryRoots.value.filter(root => normalizeEncryptedRootPath(root) !== normalized)
+  const { [normalized]: _removed, ...rest } = encryptedDirectoryMetadata.value
+  encryptedDirectoryMetadata.value = rest
+  setEncryptedDirectoryPassword(normalized, '')
 }
 
 function resolveEncryptedRootForPath(path: string): string | null {
@@ -4455,6 +4493,7 @@ async function deleteSelectedFiles() {
         failedCount += 1
         continue
       }
+      unregisterEncryptedDirectoryRootsForDeletedPath(item.path)
       deletedCount += 1
     } catch {
       failedCount += 1
@@ -4495,6 +4534,7 @@ async function deleteFile(item: FileItem) {
       throw new Error('删除失败')
     }
 
+    unregisterEncryptedDirectoryRootsForDeletedPath(item.path)
     fetchFiles(currentPath.value)
   } catch (error) {
     showError(`删除失败: ${String(error)}`)
@@ -5088,6 +5128,8 @@ async function createFolderWithName(
   if (response.ok || response.status === 405) {
     if (response.ok && encrypted) {
       await createEncryptedDirectoryMarker(targetPath, password, cipherSuite, passwordSource)
+    } else if (response.ok) {
+      unregisterExactEncryptedDirectoryRoot(targetPath)
     }
     fetchFiles(currentPath.value)
     if (response.status === 405) {
