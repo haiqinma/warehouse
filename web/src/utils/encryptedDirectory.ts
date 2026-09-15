@@ -72,7 +72,7 @@ export function isEncryptedDirectoryMetadataFileName(name: string): boolean {
 export function isPathInsideEncryptedRoot(path: string, encryptedRoot: string): boolean {
   const target = normalizeDirectoryRoot(path)
   const root = normalizeDirectoryRoot(encryptedRoot)
-  return root === '/' ? true : target === root.slice(0, -1) || target.startsWith(root)
+  return root === '/' ? true : target === root || target.startsWith(`${root}/`)
 }
 
 export function resolveEncryptedRoot(path: string, roots: string[]): string | null {
@@ -83,12 +83,24 @@ export function resolveEncryptedRoot(path: string, roots: string[]): string | nu
 
   for (const root of normalizedRoots) {
     if (root === '/') return '/'
-    if (target === root || target.startsWith(root)) {
+    if (target === root || target.startsWith(`${root}/`)) {
       return root
     }
   }
 
   return null
+}
+
+export function removeEncryptedRootsForDeletedPath(roots: string[], deletedPath: string): string[] {
+  const deletedRoot = normalizeDirectoryRoot(deletedPath)
+  if (deletedRoot === '/') return []
+  return roots
+    .map(item => normalizeDirectoryRoot(item))
+    .filter((root, index, items) => items.indexOf(root) === index)
+    .filter(root => {
+      if (root === '/') return deletedRoot !== '/'
+      return root !== deletedRoot && !root.startsWith(`${deletedRoot}/`)
+    })
 }
 
 function readPasswordCache(): Record<string, string> {
